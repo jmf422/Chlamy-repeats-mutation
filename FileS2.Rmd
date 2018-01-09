@@ -1,0 +1,513 @@
+---
+title: "File S2"
+author: "Jullien Flynn"
+date: '2018-01-08'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "/Users/jullienflynn/Documents/AndyLab/Chlamy/R_Analysis/data_in/")
+```
+**This file details the analysis of paired-end reads to determine interspersion between repeats (when there are repeats on both mate pairs).**  
+
+Specifically, kseek was run separately for R1 and R2.  
+
+Next, Perl scripts were used:  
+```pl rep_mate.pl read_1.rep ```  
+Followed by:  
+```pl mp.compile.updated.pl read_1.rep.mp read_2.rep.mp outfile```  
+
+*Note*:  one MA line per ancestor was randomly chosen to be representative, so 6 MA lines in total were used.  
+
+**Import required packages** 
+
+```{r, include=FALSE}
+library(ggplot2)
+source("http://bioconductor.org/biocLite.R")
+require(Biostrings)
+```
+
+# Import and clean up data
+
+``` {r}
+rm(list=ls())
+CC_2931_MA1.rep <- read.delim("ERR968392.out.rep.mpx")
+CC_2937_MA4.rep <- read.delim("ERR968409.out.rep.mpx")
+CC_1952_MA2.rep <- read.delim("ERR968352.out.rep.mpx")
+CC_2342_MA7.rep  <- read.delim("ERR968369.out.rep.mpx")
+CC_2344_MA15.rep <- read.delim("ERR968391.out.rep.mpx")
+CC_1373_MA7.rep <- read.delim("ERR968344.out.rep.mpx")
+
+# import the names of the common kmers you are interested in.
+# already have the common kmer union in my environment, but can import in file if not in environment
+common.kmer.union <- read.table("../../chlamy_union_kmers.txt")
+common.kmer.union <- as.vector(common.kmer.union$V1)
+
+#head(CC_1373_MA7.rep)
+#ncol(CC_1373_MA7.rep)
+
+process_rep_files <- function(inputrep) {
+  kmer_names <- inputrep[,1]
+  inputrep$X <- NULL
+  rownames(inputrep) <- kmer_names
+  inputrep <- as.matrix(inputrep)
+  return(inputrep)
+}
+CC_2931_MA1.rep <- process_rep_files(CC_2931_MA1.rep)
+CC_2937_MA4.rep <- process_rep_files(CC_2937_MA4.rep)
+CC_1952_MA2.rep <- process_rep_files(CC_1952_MA2.rep)
+CC_2342_MA7.rep <- process_rep_files(CC_2342_MA7.rep)
+CC_2344_MA15.rep <- process_rep_files(CC_2344_MA15.rep)
+CC_1373_MA7.rep <- process_rep_files(CC_1373_MA7.rep)
+
+
+```
+ 
+Important analysis steps:
+1) Take the mpx matrix (generated from the perl scrips) and look at the kmers of interest (the common union kmers)  
+2) Make a pairwise matrix by adding the two triangles of the matrix, because identity of R1 vs R2 is not important here.
+3) Calculate the interspersion metric, by bringing in data generated from external scripts. A metric is calculated for each pair of kmers i and j. Shell script `run_get_ni,nj.sh` is used to calculate values required for the interspersion metric. Python script `extract.py` is used to get the reads containing specific kmers.  
+
+
+```{r}
+get_intsp_metric.mx <- function(totalreadsfile, inputrep) {
+  interspersion.matrix <- matrix(ncol=ncol(inputrep), nrow=nrow(inputrep))
+  interspersion.matrix <- inputrep[colnames(inputrep) %in% common.kmer.union, rownames(inputrep) %in% common.kmer.union] 
+
+  pairwise.matrix <- matrix(ncol=ncol(interspersion.matrix), nrow=nrow(interspersion.matrix))
+
+  rownames(pairwise.matrix) <- rownames(interspersion.matrix)
+  colnames(pairwise.matrix) <- colnames(interspersion.matrix)
+
+  for (i in 1:nrow(interspersion.matrix)) {
+    pairwise.matrix[i,i] <- interspersion.matrix[i,i]
+    for (j in (i+1):nrow(interspersion.matrix)) {
+      if (j <= nrow(interspersion.matrix)) {
+        sum <- interspersion.matrix[i,j] + interspersion.matrix[j,i]
+        pairwise.matrix[i,j] <- sum
+      }
+    }
+  }
+
+  total.reads <- read.table(totalreadsfile, quote="\"", comment.char="")
+  read.counts <- as.vector(total.reads[,1])
+  names(read.counts) <- common.kmer.union
+  read.counts_temp <- read.counts[names(read.counts) %in% colnames(pairwise.matrix)]
+  read.counts <- read.counts_temp[order(match(names(read.counts_temp), colnames(pairwise.matrix)))]
+  names(read.counts) == colnames(pairwise.matrix)
+
+  interspersion.metric.matrix <- matrix(ncol=ncol(pairwise.matrix), nrow=nrow(pairwise.matrix))
+  rownames(interspersion.metric.matrix) <- rownames(pairwise.matrix)
+  colnames(interspersion.metric.matrix) <- colnames(pairwise.matrix)
+
+  for (i in 1:ncol(pairwise.matrix)) {
+    for (j in i:ncol(pairwise.matrix)) { # i will equal j, for the same kmer with itself
+      ni <- as.numeric(read.counts[i])
+      nj <- as.numeric(read.counts[j])
+      nij <- pairwise.matrix[i,j]
+      interspersion.metric.matrix[i,j] <- nij / (sqrt(ni*nj))
+    }
+  }
+return(interspersion.metric.matrix)
+}
+```
+Using this function, generate interspersion metric matrices for all of the ancestors.  
+```{r}
+
+interspersion.metric.matrix_1373 <- get_intsp_metric.mx("ERR968344.total.reads.txt", CC_1373_MA7.rep)
+interspersion.metric.matrix_1952 <- get_intsp_metric.mx("ERR968352.total.reads.txt", CC_1952_MA2.rep)
+interspersion.metric.matrix_2342 <- get_intsp_metric.mx("ERR968369.total.reads.txt", CC_2342_MA7.rep)
+interspersion.metric.matrix_2344 <- get_intsp_metric.mx("ERR968391.total.reads.txt", CC_2344_MA15.rep)
+interspersion.metric.matrix_2931 <- get_intsp_metric.mx("ERR968392.total.reads.txt", CC_2931_MA1.rep)
+interspersion.metric.matrix_2937 <- get_intsp_metric.mx("ERR968409.total.reads.txt", CC_2937_MA4.rep)
+
+```
+Make another function that calculates the percent of reads from a kmer that are interspersed with other kmers.
+```{r}
+get_percent_interspersed <- function(totalreadsfile, inputrep, kmername) {
+  col_number <- which(colnames(inputrep) == kmername)
+  sum_column <- sum(inputrep[,col_number])
+  sum_row <- sum(inputrep[col_number,]) - inputrep[col_number,col_number]
+  total <- sum_column + sum_row
+  total.reads <-  read.table(totalreadsfile, quote="\"", comment.char="")
+  read.counts <- as.vector(total.reads[,1])
+  names(read.counts) <- common.kmer.union
+  read.count.kmer <- read.counts[kmername]
+  return (total/read.count.kmer)
+}
+
+which(colnames(CC_2931_MA1.rep) == "AC")
+total.reads <-  read.table("ERR968392.total.reads.txt", quote="\"", comment.char="")
+read.counts <- as.vector(total.reads[,1])
+names(read.counts) <- common.kmer.union
+read.count.kmer <- read.counts["AC"]
+
+which(colnames(CC_2937_MA4.rep) == "AGGGCC")
+total.reads <-  read.table("ERR968392.total.reads.txt", quote="\"", comment.char="")
+read.counts <- as.vector(total.reads[,1])
+names(read.counts) <- common.kmer.union
+read.count.kmer <- read.counts["AC"]
+
+get_percent_interspersed("ERR968392.total.reads.txt", CC_2931_MA1.rep, "AAAACCCT")
+
+
+# function that loops through all kmers and returns a vector
+get_percent_summary <- function(totalreadsfile, inputrep) {
+  kmers <- colnames(inputrep)[colnames(inputrep) %in% common.kmer.union]
+  result <- c()
+  for (i in 1:length(kmers)) {
+    result <- c(result, get_percent_interspersed(totalreadsfile, inputrep, kmers[i])) 
+  }
+  return(result)
+}
+
+
+int.summary_1373 <- get_percent_summary("ERR968344.total.reads.txt", CC_1373_MA7.rep)
+int.summary_1952 <- get_percent_summary("ERR968352.total.reads.txt", CC_1952_MA2.rep)
+int.summary_2342 <- get_percent_summary("ERR968369.total.reads.txt", CC_2342_MA7.rep)
+int.summary_2344 <- get_percent_summary("ERR968391.total.reads.txt", CC_2344_MA15.rep)
+int.summary_2931 <- get_percent_summary("ERR968392.total.reads.txt", CC_2931_MA1.rep)
+int.summary_2937 <- get_percent_summary("ERR968409.total.reads.txt", CC_2937_MA4.rep)
+
+par(mfrow=c(2,3))
+barplot(int.summary_1373, names.arg=names(int.summary_1373), las=2, cex.names=0.4, cex.axis=0.8, main="CC-1373", ylab="fraction of reads")
+barplot(int.summary_1952, names.arg=names(int.summary_1952), las=2, cex.names=0.4, cex.axis=0.8, main="CC-1952", ylab="fraction of reads")
+barplot(int.summary_2342, names.arg=names(int.summary_2342), las=2, cex.names=0.4, cex.axis=0.8, main="CC-2342", ylab="fraction of reads")
+barplot(int.summary_2344, names.arg=names(int.summary_2344), las=2, cex.names=0.4, cex.axis=0.8, main="CC-2344", ylab="fraction of reads")
+barplot(int.summary_2931, names.arg=names(int.summary_2931), las=2, cex.names=0.4, cex.axis=0.8, main="CC-2931", ylab="fraction of reads")
+barplot(int.summary_2937, names.arg=names(int.summary_2937), las=2, cex.names=0.4, cex.axis=0.8, main="CC-2937", ylab="fraction of reads")
+
+mean(int.summary_1373)
+mean(int.summary_1952)
+mean(int.summary_2342)
+mean(int.summary_2344)
+mean(int.summary_2931)
+mean(int.summary_2937)
+
+```
+# How many, and what percent of chloroplast-like reads are interspersed with the telomere repeat? 
+
+```{r}
+
+count_int_reads_telomere <- function(totalreadsfile, inputrep, kmer) {
+  interspersion.matrix <- matrix(ncol=ncol(inputrep), nrow=nrow(inputrep))
+  interspersion.matrix <- inputrep[colnames(inputrep) %in% common.kmer.union, rownames(inputrep) %in% common.kmer.union] 
+  
+  pairwise.matrix <- matrix(ncol=ncol(interspersion.matrix), nrow=nrow(interspersion.matrix))
+  
+  rownames(pairwise.matrix) <- rownames(interspersion.matrix)
+  colnames(pairwise.matrix) <- colnames(interspersion.matrix)
+  
+  for (i in 1:nrow(interspersion.matrix)) {
+    pairwise.matrix[i,i] <- interspersion.matrix[i,i]
+    for (j in (i+1):nrow(interspersion.matrix)) {
+      if (j <= nrow(interspersion.matrix)) {
+        sum <- interspersion.matrix[i,j] + interspersion.matrix[j,i]
+        pairwise.matrix[i,j] <- sum
+      }
+    }
+  }
+  
+  total.reads <- read.table(totalreadsfile, quote="\"", comment.char="")
+  read.counts <- as.vector(total.reads[,1])
+  names(read.counts) <- common.kmer.union
+  read.counts_temp <- read.counts[names(read.counts) %in% colnames(pairwise.matrix)]
+  read.counts <- read.counts_temp[order(match(names(read.counts_temp), colnames(pairwise.matrix)))]
+  names(read.counts) == colnames(pairwise.matrix)
+  
+  res_1 <- pairwise.matrix[kmer, "AAAACCCT"]
+  res_2 <- pairwise.matrix["AAAACCCT", kmer]
+  temp <- c(res_1, res_2)
+  res_12 <- temp[!is.na(temp)]
+  res_3 <- res_12/read.counts[kmer]
+  res_final <- c(res_12, res_3)
+  print(res_final)
+}
+
+count_int_reads_telomere("ERR968344.total.reads.txt", CC_1373_MA7.rep, "AAATAACAAT")
+count_int_reads_telomere("ERR968344.total.reads.txt", CC_1373_MA7.rep, "AAATACCTTACGGGAATAT")
+count_int_reads_telomere("ERR968344.total.reads.txt", CC_1373_MA7.rep, "AAATACTTACGGGAATAT")
+
+cp_kmers_1373 <- c("AAATACCTTACGGGAATAT", "AAATAACAAT", "AAATACTTACGGGAATAT")
+for (i in 1:length(cp_kmers_1373)) {
+  count_int_reads_telomere("ERR968344.total.reads.txt", CC_1373_MA7.rep, cp_kmers_1373[i])
+}
+
+cp_kmers_1952 <- c("AATAGATAATAT", "AAATACTTACGGGAATAT", "AAAATATATAAATATAGCT", "AAAGAAGTATATAAAT", "AAATTTATATACTCC", "AAATACCTTACGGGAATAT")
+
+for (i in 1:length(cp_kmers_1952)) {
+  count_int_reads_telomere("ERR968352.total.reads.txt", CC_1952_MA2.rep, cp_kmers_1952[i])
+}
+
+cp_kmers_2342 <- c("AAAAAGGTAAATGTATTTAT")
+for (i in 1:length(cp_kmers_2342)) {
+  count_int_reads_telomere("ERR968369.total.reads.txt", CC_2342_MA7.rep, cp_kmers_2342[i])
+}
+
+cp_kmers_2344 <- c("AAAATAAAGTGT", "AAATACCTTACGGGAATAT", "AAATTTATATACTCC")
+for (i in 1:length(cp_kmers_2344)) {
+  count_int_reads_telomere("ERR968391.total.reads.txt", CC_2344_MA15.rep, cp_kmers_2344[i])
+}
+
+cp_kmers_2931 <- c("AAAAAGGTAAATGTATTTAT", "AAATAGCAGTATAT", "AAAATAAAGTGT")
+for (i in 1:length(cp_kmers_2931)) {
+  count_int_reads_telomere("ERR968392.total.reads.txt", CC_2931_MA1.rep, cp_kmers_2931[i])
+}
+
+cp_kmers_2937 <- c("AAATACTTACGGGAATAT", "AAATACCTTACGGGAATAT")
+for (i in 1:length(cp_kmers_2937)) {
+  count_int_reads_telomere("ERR968409.total.reads.txt", CC_2937_MA4.rep, cp_kmers_2937[i])
+}
+
+
+```
+# Get kmers that are interspersed with each other
+Kmers that have an interspersion metric > 0 are interspersed with each other.  
+
+
+``` {r}
+# function that takes a kmer sequence and an interspersion matrix, and returns the kmers that are interspersed with the given input kmer (along with the corresponding interspersion metric)
+get_interspersed_kmers <- function(kmer, input_mx) {
+  kmer.index <- which(colnames(input_mx)==kmer)
+  a <- input_mx[kmer.index,which(input_mx[kmer.index,] > 0)]
+  a.names <- names(which(input_mx[kmer.index,] > 0))
+  b <- input_mx[which(input_mx[,kmer.index] > 0), kmer.index]
+  b.names <- names(which(input_mx[,kmer.index] > 0))
+  ab <- c(a,b)
+  ab.names <- c(a.names, b.names)
+  names(ab) <- ab.names
+  return(ab)
+}
+
+# function to calculate GC content of a kmer
+Calc_GC_content <- function (kmer_string) {
+  string <- BString(kmer_string)
+  gc.content <- c(letterFrequency(string, letters=c("CG"), as.prob=F)/(length(string)))
+  return(gc.content)
+}
+
+AAAACCCT_1373 <- get_interspersed_kmers("AAAACCCT", interspersion.metric.matrix_1373)
+hist(sapply(names(AAAACCCT_1373), Calc_GC_content), xlab="GC content", main="1373: GC of kmers interspersed with telomere")
+length(AAAACCCT_1373)
+AAAACCCT_1373
+
+
+# these are the kmers that were found with Tandem Repeats Finder to be on the chloroplast assembly
+cp_kmers <- c("AAAATAAAGTGT", "AAAATATATAAATATAGCT", "AAATACCTTACGGGAATAT")
+
+# which kmers are interspersed with the telomere repeat in each of the ancestors?
+
+AAAACCCT_1952 <- get_interspersed_kmers("AAAACCCT", interspersion.metric.matrix_1952)
+AAAACCCT_1952
+hist(sapply(names(AAAACCCT_1952), Calc_GC_content), xlab="GC content", main="1952: GC of kmers interspersed with telomere")
+length(AAAACCCT_1952)
+
+AAAACCCT_2342 <- get_interspersed_kmers("AAAACCCT", interspersion.metric.matrix_2342)
+AAAACCCT_2342
+hist(sapply(names(AAAACCCT_2342), Calc_GC_content), xlab="GC content", main="2342: GC of kmers interspersed with telomere")
+length(AAAACCCT_2342)
+
+AAAACCCT_2344 <- get_interspersed_kmers("AAAACCCT", interspersion.metric.matrix_2344)
+AAAACCCT_2344
+hist(sapply(names(AAAACCCT_2344), Calc_GC_content), xlab="GC content", main="2344: GC of kmers interspersed with telomere")
+length(AAAACCCT_2344)
+
+AAAACCCT_2931 <- get_interspersed_kmers("AAAACCCT", interspersion.metric.matrix_2931)
+AAAACCCT_2931
+length(AAAACCCT_2931)
+hist(sapply(names(AAAACCCT_2931), Calc_GC_content), xlab="GC content", main="2931: GC of kmers interspersed with telomere")
+
+AAAACCCT_2937 <- get_interspersed_kmers("AAAACCCT", interspersion.metric.matrix_2937)
+AAAACCCT_2937
+length(AAAACCCT_2937)
+hist(sapply(names(AAAACCCT_2937), Calc_GC_content), xlab="GC content", main="2937: GC of kmers interspersed with telomere")
+
+possible_cp_telomere <- c("AAATAACAAT", "AAATACCTTACGGGAATAT", "AAATACTTACGGGAATAT", "AAAATATATAAATATAGCT", "AAAGAAGTATATAAAT", "AAATACCTTACGGGAATAT", "AAATACTTACGGGAATAT", "AAATTTATATACTCC", "AATAGATAATAT", "AAATAGCAGTATAT", "AAAAAGGTAAATGTATTTAT", "AAAATAAAGTGT", "AAAATATATAAATATAGCT", "AAATACCTTACGGGAATAT", "AAATTTATATACTCC", "AAAATAAAGTGT", "AAATAGCAGTATAT", "AAAAAGGTAAATGTATTTAT", "AAATACCTTACGGGAATAT", "AAATACTTACGGGAATAT")
+
+length(possible_cp_telomere)
+cp_kmers %in% possible_cp_telomere
+
+summary(as.factor(possible_cp_telomere))
+
+```
+Check interspersion of putative chloroplast kmers  
+
+```{r}
+
+AAATACCTTACGGGAATAT_1373 <- get_interspersed_kmers("AAATACCTTACGGGAATAT", interspersion.metric.matrix_1373)
+AAATACCTTACGGGAATAT_1373
+
+AAATACCTTACGGGAATAT_1952 <- get_interspersed_kmers("AAATACCTTACGGGAATAT", interspersion.metric.matrix_1952)
+AAATACCTTACGGGAATAT_1952
+
+AAATACCTTACGGGAATAT_2342 <- get_interspersed_kmers("AAATACCTTACGGGAATAT", interspersion.metric.matrix_2342)
+AAATACCTTACGGGAATAT_2342
+
+AAATACCTTACGGGAATAT_2344 <- get_interspersed_kmers("AAATACCTTACGGGAATAT", interspersion.metric.matrix_2344)
+AAATACCTTACGGGAATAT_2344
+
+AAATACCTTACGGGAATAT_2931 <- get_interspersed_kmers("AAATACCTTACGGGAATAT", interspersion.metric.matrix_2931)
+AAATACCTTACGGGAATAT_2931
+
+AAATACCTTACGGGAATAT_2937 <- get_interspersed_kmers("AAATACCTTACGGGAATAT", interspersion.metric.matrix_2937)
+AAATACCTTACGGGAATAT_2937
+length(AAATACCTTACGGGAATAT_2937)
+
+```
+## What is the interspersion patterns of the repeats that have interesting patterns of interspersion in the correlation plots? 
+```{r}
+
+(AGGC_1373 <- get_interspersed_kmers("AGGC", interspersion.metric.matrix_1373))
+(AGGC_1952 <- get_interspersed_kmers("AGGC", interspersion.metric.matrix_1952))
+(AGGC_2342 <- get_interspersed_kmers("AGGC", interspersion.metric.matrix_2342))
+(AGGC_2344 <- get_interspersed_kmers("AGGC", interspersion.metric.matrix_2344))
+(AGGC_2931 <- get_interspersed_kmers("AGGC", interspersion.metric.matrix_2931))
+(AGGC_2937 <- get_interspersed_kmers("AGGC", interspersion.metric.matrix_2937))
+
+(AGGCGC_1373 <- get_interspersed_kmers("AGGCGC", interspersion.metric.matrix_1373))
+(AGGCGC_1952 <- get_interspersed_kmers("AGGCGC", interspersion.metric.matrix_1952))
+(AGGCGC_2342 <- get_interspersed_kmers("AGGCGC", interspersion.metric.matrix_2342))
+(AGGCGC_2344 <- get_interspersed_kmers("AGGCGC", interspersion.metric.matrix_2344))
+(AGGCGC_2931 <- get_interspersed_kmers("AGGCGC", interspersion.metric.matrix_2931))
+(AGGCGC_2937 <- get_interspersed_kmers("AGGCGC", interspersion.metric.matrix_2937))
+
+(ACCAGC_1373 <- get_interspersed_kmers("ACCAGC", interspersion.metric.matrix_1373))
+(ACCAGC_1952 <- get_interspersed_kmers("ACCAGC", interspersion.metric.matrix_1952))
+(AGGCGC_2342 <- get_interspersed_kmers("AGGCGC", interspersion.metric.matrix_2342))
+(AGGCGC_2344 <- get_interspersed_kmers("AGGCGC", interspersion.metric.matrix_2344))
+(AGGCGC_2931 <- get_interspersed_kmers("AGGCGC", interspersion.metric.matrix_2931))
+(AGGCGC_2937 <- get_interspersed_kmers("AGGCGC", interspersion.metric.matrix_2937))
+
+(ACAGGC_1373 <- get_interspersed_kmers("ACAGGC", interspersion.metric.matrix_1373))
+(ACAGGC_1952 <- get_interspersed_kmers("ACAGGC", interspersion.metric.matrix_1952))
+(ACAGGC_2342 <- get_interspersed_kmers("ACAGGC", interspersion.metric.matrix_2342))
+(ACAGGC_2344 <- get_interspersed_kmers("ACAGGC", interspersion.metric.matrix_2344))
+(ACAGGC_2931 <- get_interspersed_kmers("ACAGGC", interspersion.metric.matrix_2931))
+(ACAGGC_2937 <- get_interspersed_kmers("ACAGGC", interspersion.metric.matrix_2937))
+
+(AC_1373 <- get_interspersed_kmers("AC", interspersion.metric.matrix_1373))
+length(AC_1373)
+# all the kmers that are interspersed with others are interspersed with AC
+
+```
+# Get number of other kmers each kmer is interspersed with  
+
+```{r}
+# function returns number of kmers a kmer with a given index is interspersed with
+get_total_interspersion <- function(kmer, input_mx ) {
+  
+  if (kmer.index == 1) { 
+    return (sum(interspersion.metric.matrix[kmer.index, (kmer.index + 1):ncol(interspersion.metric.matrix) ]))
+  } else if (kmer.index == ncol(interspersion.metric.matrix)) {
+    return (sum(interspersion.metric.matrix[1:(kmer.index-1), kmer.index ]))
+  } else {
+    total_rows <- sum(interspersion.metric.matrix[kmer.index, (kmer.index + 1):ncol(interspersion.metric.matrix) ])
+    total_cols <- sum(interspersion.metric.matrix[1:(kmer.index-1), kmer.index ])
+    total <- total_rows + total_cols
+    return (total)
+  }
+}
+
+```
+Look at the kmers that are interesting because their interspersion matrices - sometimes a positive correlation and sometimes negative. Make a bar chart par(mfrow)  
+
+```{r}
+par(mfrow=c(3,2))
+barplot(AGGCGC_1373, names.arg=names(AGGCGC_1373), las=2, cex.names=0.7, cex.axis=0.8, main="AGGCGC_1373")
+barplot(AGGCGC_1952, names.arg=names(AGGCGC_1952), las=2, cex.names=0.7, cex.axis=0.8, main="AGGCGC_1952")
+barplot(AGGCGC_2342, names.arg=names(AGGCGC_2342), las=2, cex.names=0.7, cex.axis=0.8, main="AGGCGC_2342")
+barplot(AGGCGC_2344, names.arg=names(AGGCGC_2344), las=2, cex.names=0.7, cex.axis=0.8, main="AGGCGC_2344")
+barplot(AGGCGC_2931, names.arg=names(AGGCGC_2931), las=2, cex.names=0.7, cex.axis=0.8, main="AGGCGC_2931")
+barplot(AGGCGC_2937, names.arg=names(AGGCGC_2937), las=2, cex.names=0.7, cex.axis=0.8, main="AGGCGC_2937")
+
+barplot(ACAGGC_1373, names.arg=names(ACAGGC_1373), las=2, cex.names=0.7, cex.axis=0.8, main="ACAGGC_1373")
+barplot(ACAGGC_1952, names.arg=names(ACAGGC_1952), las=2, cex.names=0.7, cex.axis=0.8, main="ACAGGC_1952")
+barplot(ACAGGC_2342, names.arg=names(ACAGGC_2342), las=2, cex.names=0.7, cex.axis=0.8, main="ACAGGC_2342")
+barplot(ACAGGC_2344, names.arg=names(ACAGGC_2344), las=2, cex.names=0.7, cex.axis=0.8, main="ACAGGC_2344")
+barplot(ACAGGC_2931, names.arg=names(ACAGGC_2931), las=2, cex.names=0.7, cex.axis=0.8, main="ACAGGC_2931")
+barplot(ACAGGC_2937, names.arg=names(ACAGGC_2937), las=2, cex.names=0.7, cex.axis=0.8, main="ACAGGC_2937")
+
+library(ggplot2)
+temp <- upper.tri(interspersion.metric.matrix_1373, diag = T)
+# you already have triangular matrix
+```
+# Kmers that are related closely by sequence (see Figure 3 in manuscript) - do they have interesting patterns of interspersion?
+
+```{r}
+related_kmers_AG <- c("ACGC", "ACGCC", "ACGCCC", "AGGC", "AGGCGG", "AGGCGC","AGGGC",  "AGGGGC", "AGAGGC", "AGCGGC", "AGCGGG", "AGCCGC", "AGCGCC", "AGCCGG", "AGGGCC")
+
+related_kmers_AC <- c("ACCGGC", "ACCCGC", "ACACGC", "ACAGGC", "ACAGGG", "ACCAGC", "ACCCGG", "ACTGGGC")
+
+related_kmers_AG_1373 <- related_kmers_AG[related_kmers_AG %in% colnames(interspersion.metric.matrix_1373)] 
+interspersion.metric.matrix_1373[related_kmers_AG_1373, related_kmers_AG_1373]
+related_kmers_AC_1373 <- related_kmers_AC[related_kmers_AC %in% colnames(interspersion.metric.matrix_1373)]
+interspersion.metric.matrix_1373[related_kmers_AC_1373, related_kmers_AC_1373]
+# not much interspersion between related kmers
+
+related_kmers_AG_1952 <- related_kmers_AG[related_kmers_AG %in% colnames(interspersion.metric.matrix_1952)] 
+interspersion.metric.matrix_1952[related_kmers_AG_1952, related_kmers_AG_1952]
+related_kmers_AC_1952 <- related_kmers_AC[related_kmers_AC %in% colnames(interspersion.metric.matrix_1952)]
+interspersion.metric.matrix_1952[related_kmers_AC_1952, related_kmers_AC_1952]
+# not much interspersion between related kmers
+
+related_kmers_AG_2342 <- related_kmers_AG[related_kmers_AG %in% colnames(interspersion.metric.matrix_2342)] 
+interspersion.metric.matrix_2342[related_kmers_AG_2342, related_kmers_AG_2342]
+related_kmers_AC_2342 <- related_kmers_AC[related_kmers_AC %in% colnames(interspersion.metric.matrix_2342)]
+interspersion.metric.matrix_2342[related_kmers_AC_2342, related_kmers_AC_2342]
+# more interspersions in in the AG kmers, but not seeming to make pattern in accordance to the correlation matrix
+
+related_kmers_AG_2344 <- related_kmers_AG[related_kmers_AG %in% colnames(interspersion.metric.matrix_2344)] 
+interspersion.metric.matrix_2344[related_kmers_AG_2344, related_kmers_AG_2344]
+related_kmers_AC_2344 <- related_kmers_AC[related_kmers_AC %in% colnames(interspersion.metric.matrix_2344)]
+interspersion.metric.matrix_2344[related_kmers_AC_2344, related_kmers_AC_2344]
+# all interspersed kmers are correlated positively or negatively
+
+related_kmers_AG_2931 <- related_kmers_AG[related_kmers_AG %in% colnames(interspersion.metric.matrix_2931)] 
+interspersion.metric.matrix_2931[related_kmers_AG_2931, related_kmers_AG_2931]
+related_kmers_AC_2931 <- related_kmers_AC[related_kmers_AC %in% colnames(interspersion.metric.matrix_2931)]
+interspersion.metric.matrix_2931[related_kmers_AC_2931, related_kmers_AC_2931]
+# not many interspersed kmers
+
+related_kmers_AG_2937 <- related_kmers_AG[related_kmers_AG %in% colnames(interspersion.metric.matrix_2937)] 
+interspersion.metric.matrix_2937[related_kmers_AG_2937, related_kmers_AG_2937]
+related_kmers_AC_2937 <- related_kmers_AC[related_kmers_AC %in% colnames(interspersion.metric.matrix_2937)]
+interspersion.metric.matrix_2937[related_kmers_AC_2937, related_kmers_AC_2937]
+
+
+```
+# Kmers that are in the correlation matrix - what are their intersperion patterns?  
+
+```{r}
+corr_mx_kmers <- c("C", "AC", "ACC", "AAC", "ATC", "AGC", "AGG", "AAT", "CCG", "AGCGGC", "AGCGCC", "AGCGGG", "AGCCGC", "AGCCGG", "AGGGGC", "AGGGC", "AGGCGC", "AGGC", "AGGCGG", "ACGC", "ACGCC", "ACGCCC", "ACCCGC", "ACCAGC", "ACCGGC", "ACAGGC", "ACAGGG", "ACACGC", "AAAGT")
+length(corr_mx_kmers)
+#write.csv(corr_mx_kmers, file="~/Documents/AndyLab/Chlamy/R_Analysis/corr_mx_kmers.csv", quote = F, row.names = F)
+
+corr_mx_kmers_1373 <- corr_mx_kmers[corr_mx_kmers %in% colnames(interspersion.metric.matrix_1373)]
+corrkmers_1373 <- interspersion.metric.matrix_1373[corr_mx_kmers_1373, corr_mx_kmers_1373]
+
+get_corrkmer_mx <- function(interspersion_mx, Ancestor) {
+  outdir <- "~/Documents/AndyLab/Chlamy/R_Analysis/data_out/"
+  filename <- paste0(outdir, Ancestor, "_int.summary", ".csv")
+  kmers_to_incude <- corr_mx_kmers[corr_mx_kmers %in% colnames(interspersion_mx)] 
+  output_mx <- interspersion_mx[kmers_to_incude, kmers_to_incude]
+  write.csv(output_mx, file=filename, quote=F)
+}
+get_corrkmer_mx(interspersion.metric.matrix_1373, "CC-1373")
+get_corrkmer_mx(interspersion.metric.matrix_1952, "CC-1952")
+get_corrkmer_mx(interspersion.metric.matrix_2342, "CC-2342")
+get_corrkmer_mx(interspersion.metric.matrix_2344, "CC-2344")
+get_corrkmer_mx(interspersion.metric.matrix_2931, "CC-2931")
+get_corrkmer_mx(interspersion.metric.matrix_2937, "CC-2937")
+
+```
+**All of the common kmers were interspersed to some extent in at least one ancestor.**  
+
+```{r}
+
+all_interspersed_kmers <- Reduce(union, list(colnames(interspersion.metric.matrix_1373), colnames(interspersion.metric.matrix_1952), colnames(interspersion.metric.matrix_2342), colnames(interspersion.metric.matrix_2344), colnames(interspersion.metric.matrix_2931), colnames(interspersion.metric.matrix_2937)))
+
+all_interspersed_kmers %in% common.kmer.union
+common.kmer.union %in% all_interspersed_kmers                             
+length(colnames(interspersion.metric.matrix_1373))
+ncol((interspersion.metric.matrix_1952))

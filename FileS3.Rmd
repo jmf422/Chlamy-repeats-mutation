@@ -1,0 +1,907 @@
+---
+title: "File S2"
+author: "Jullien Flynn"
+date: '2017-08-08'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+This is the second part of analysis including for the paper "Rates and patterns of mutation in tandem repetitive DNA in six independent lineages of Chamydomonas reinhardtii". 
+This file goes through the analysis of mutation rates and patterns in genome-wide tandem repeats in 85 mutation accumulation lines from 6 ancestral strains of Chlamydomonas reinhardtii.  
+
+First, load necessary libraries:  
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+library(adegenet)
+library(ggplot2)
+library(ape)
+library(Biostrings)
+library(ggbiplot)
+library(corrplot)
+source("http://bioconductor.org/biocLite.R")
+require(Biostrings)
+```
+# Load in and process dataset  
+This dataset is the counts of all kmers found by k-Seek in the 85 MA lines analyzed. Before running k-Seek, the data have been trimmed using trimmomatic to remove low quality sequences. The kmer counts have been normalized by GC content and depth. 
+
+```{r}
+data <- read.csv('/Users/jullienflynn/Documents/AndyLab/Chlamy/R_Analysis/data_in/Chlamy_trimmed_GCcorr.compiled')
+file_names <- as.vector(data$X)
+rownames(data) <- file_names
+data[,1] <- NULL
+
+# match the file names to the names of the lines
+Chlamy_file_info <- read.delim("~/Documents/AndyLab/Chlamy/R_Analysis/info/Chlamy_file_info.txt", header=FALSE)
+Chlamy_lines <- as.vector(Chlamy_file_info[,2])
+Chlamy_files <- as.vector(Chlamy_file_info[,1])
+names(Chlamy_lines) <- Chlamy_files
+Chlamy_lines <- as.data.frame(Chlamy_lines)
+
+data_withnames <- merge(data, Chlamy_lines, by=0)
+lines <- data_withnames[,3314]
+data_withnames <- data_withnames[,-c(1,3314)]
+rownames(data_withnames) <- lines
+data_withnames <- as.matrix(data_withnames)
+
+# sort the columns (kmers) by their mean abundance
+# here we want to remove the telomere repeat from mutation rate calculation  
+# remove the MA lines that do not have an accurate measure of generations  
+kmer_means <- colMeans(data_withnames)
+data_sorted <- data_withnames[,order(kmer_means, decreasing=T)]
+tel_column <- which (colnames(data_sorted) == "AAAACCCT")
+data_sorted <- data_sorted[,-tel_column]
+to_exclude <- c("CC-1373_MA15", "CC-2342_MA1", "CC-2342_MA2", "CC-2342_MA14")
+ex <- which(rownames(data_sorted) %in% to_exclude)
+data_sorted <- data_sorted[-ex,]
+```
+# Get the common kmers and make a matrix for each ancestor.  
+
+```{r}
+# function that takes in a matrix of copy numbers and returns the indexes of kmers that have a mean copy number across all MA lines of at least 100
+get_common_kmers <- function (kmer_matrix) {
+  common.kmer.indexes <- c()
+  for (i in 1:ncol(kmer_matrix)) {
+    if (mean(kmer_matrix[,i])>=100) {
+      common.kmer.indexes <- c(common.kmer.indexes, i)
+    }
+  }
+  names(common.kmer.indexes) <- colnames(kmer_matrix)[common.kmer.indexes]
+  return (common.kmer.indexes)
+}
+
+# make a new matrix for each ancestral group  
+data_1373 <- data_sorted[which (substr(rownames(data_sorted), start = 1, stop = 7) == "CC-1373"),  ]
+data_1952 <- data_sorted[which (substr(rownames(data_sorted), start = 1, stop = 7) == "CC-1952"),  ]
+data_2342 <- data_sorted[which (substr(rownames(data_sorted), start = 1, stop = 7) == "CC-2342"),  ]
+data_2344 <- data_sorted[which (substr(rownames(data_sorted), start = 1, stop = 7) == "CC-2344"),  ]
+data_2931 <- data_sorted[which (substr(rownames(data_sorted), start = 1, stop = 7) == "CC-2931"),  ]
+data_2937 <- data_sorted[which (substr(rownames(data_sorted), start = 1, stop = 7) == "CC-2937"),  ]
+
+# get the common kmer indexes for each ancestral group, and how many each has
+common.kmer.indexes_1373 <- get_common_kmers(data_1373)
+common.kmer.indexes_1952 <- get_common_kmers(data_1952)
+common.kmer.indexes_2342 <- get_common_kmers(data_2342)
+common.kmer.indexes_2344 <- get_common_kmers(data_2344)
+common.kmer.indexes_2931 <- get_common_kmers(data_2931)
+common.kmer.indexes_2937 <- get_common_kmers(data_2937)
+
+# get the common kmer union
+common.kmer.union <- Reduce(union, list
+       (names(common.kmer.indexes_1373), names(common.kmer.indexes_1952),
+       names(common.kmer.indexes_2342), names(common.kmer.indexes_2344),
+       names(common.kmer.indexes_2931), names(common.kmer.indexes_2937)
+       ))
+# get the indexes of the common kmer union
+common.kmer.union.indexes <- Reduce(union, list
+       (common.kmer.indexes_1373, common.kmer.indexes_1952,
+       common.kmer.indexes_2342, common.kmer.indexes_2344,
+       common.kmer.indexes_2931, common.kmer.indexes_2937
+       ))
+
+```
+# Calculate mutation rates  
+
+```{r}
+# import the generation data
+chlamy_generations <- read.csv("~/Documents/AndyLab/Chlamy/R_Analysis/info/chlamy_generations.csv")
+generation_names <- as.vector(chlamy_generations[,1])
+chlamy_generations <- as.vector(chlamy_generations[,2])
+names(chlamy_generations) <- generation_names
+
+# function that makes a deviation matrix from an input kmer copy number matrix and the indexes to be included
+get_deviation <- function (kmer_matrix, kmer.indexes) {
+  kmer.deviation.matrix <- matrix(nrow=nrow(kmer_matrix), ncol=max(kmer.indexes))
+  for (i in 1:max(kmer.indexes)) {
+    for (j in 1:nrow(kmer_matrix)){
+      kmer.deviation.matrix[j,i] <- kmer_matrix[j,i] - mean(kmer_matrix[,i])
+    }
+  }
+  # only include the intended columns
+  result <- kmer.deviation.matrix[,kmer.indexes]
+  rownames(result) <- rownames(kmer_matrix)
+  colnames(result) <- names(kmer.indexes)
+  return (result)
+}
+
+
+# calculate mutation rates for all ancestors: assign generations, make deviation matrix, calculate mutation rates and the absolute value of mutation rates (absolute value of + and - changes)
+
+# CC-1373
+generations_1373 <- chlamy_generations[grepl("CC-1373", names(chlamy_generations), fixed=FALSE)]
+generations_1373 <- generations_1373[-13]
+kmer_deviation_1373 <- get_deviation(data_1373, common.kmer.indexes_1373)
+mu_1373 <- kmer_deviation_1373/generations_1373
+mu_abs_1373 <- (abs(kmer_deviation_1373))/generations_1373
+
+
+# CC-1952
+generations_1952 <- chlamy_generations[grepl("CC-1952", names(chlamy_generations), fixed=FALSE)]
+kmer_deviation_1952 <- get_deviation(data_1952, common.kmer.indexes_1952)
+mu_1952 <- kmer_deviation_1952/generations_1952
+mu_abs_1952 <- (abs(kmer_deviation_1952))/generations_1952
+
+# CC-2342
+generations_2342 <- chlamy_generations[grepl("CC-2342", names(chlamy_generations), fixed=FALSE)]
+generations_2342 <- generations_2342[-c(1,2,13)] 
+kmer_deviation_2342 <- get_deviation(data_2342, common.kmer.indexes_2342)
+mu_2342 <- kmer_deviation_2342/generations_2342
+mu_abs_2342 <- (abs(kmer_deviation_2342))/generations_2342
+
+# CC-2344
+generations_2344 <- chlamy_generations[grepl("CC-2344", names(chlamy_generations), fixed=FALSE)]
+kmer_deviation_2344 <- get_deviation(data_2344, common.kmer.indexes_2344)
+mu_2344 <- kmer_deviation_2344/generations_2344
+mu_abs_2344 <- (abs(kmer_deviation_2344))/generations_2344
+
+# CC-2931
+generations_2931 <- chlamy_generations[grepl("CC-2931", names(chlamy_generations), fixed=FALSE)]
+kmer_deviation_2931 <- get_deviation(data_2931, common.kmer.indexes_2931)
+mu_2931 <- kmer_deviation_2931/generations_2931
+mu_abs_2931 <- (abs(kmer_deviation_2931))/generations_2931
+
+# CC-2937
+generations_2937 <- chlamy_generations[grepl("CC-2937", names(chlamy_generations), fixed=FALSE)]
+kmer_deviation_2937 <- get_deviation(data_2937, common.kmer.indexes_2937)
+mu_2937 <- kmer_deviation_2937/generations_2937
+mu_abs_2937 <- (abs(kmer_deviation_2937))/generations_2937
+
+```
+# Linear relationship between kmer copy number and mutation rate  
+
+```{r}
+# CC-1373
+mu_abs_1373_perkmer <-  colMeans(mu_abs_1373)
+abundance_avg_1373 <- colMeans(data_1373[,common.kmer.indexes_1373])
+names(mu_abs_1373_perkmer) == names(abundance_avg_1373)
+plot(x = abundance_avg_1373, y = mu_abs_1373_perkmer)
+summary(lm(formula = mu_abs_1373_perkmer ~ abundance_avg_1373))
+
+# CC-1952
+mu_abs_1952_perkmer <-  colMeans(mu_abs_1952)
+abundance_avg_1952 <- colMeans(data_1952[,common.kmer.indexes_1952])
+names(mu_abs_1952_perkmer) == names(abundance_avg_1952)
+summary(lm(formula = mu_abs_1952_perkmer ~ abundance_avg_1952))
+
+# CC-2342
+mu_abs_2342_perkmer <-  colMeans(mu_abs_2342)
+abundance_avg_2342 <- colMeans(data_2342[,common.kmer.indexes_2342])
+names(mu_abs_2342_perkmer) == names(abundance_avg_2342)
+summary(lm(formula = mu_abs_2342_perkmer ~ abundance_avg_2342))
+
+# CC-2344
+mu_abs_2344_perkmer <-  colMeans(mu_abs_2344)
+abundance_avg_2344 <- colMeans(data_2344[,common.kmer.indexes_2344])
+names(mu_abs_2344_perkmer) == names(abundance_avg_2344)
+summary(lm(formula = mu_abs_2344_perkmer ~ abundance_avg_2344))
+
+# CC-2931
+mu_abs_2931_perkmer <-  colMeans(mu_abs_2931)
+abundance_avg_2931 <- colMeans(data_2931[,common.kmer.indexes_2931])
+names(mu_abs_2931_perkmer) == names(abundance_avg_2931)
+summary(lm(formula = mu_abs_2931_perkmer ~ abundance_avg_2931))
+
+# CC-2937
+mu_abs_2937_perkmer <-  colMeans(mu_abs_2937)
+abundance_avg_2937 <- colMeans(data_2937[,common.kmer.indexes_2937])
+names(mu_abs_2937_perkmer) == names(abundance_avg_2937)
+summary(lm(formula = mu_abs_2937_perkmer ~ abundance_avg_2937))
+
+```
+## Get the absolute mutation rate range  
+
+```{r}
+range(mu_abs_1373_perkmer)
+range(mu_abs_1952_perkmer)
+range(mu_abs_2342_perkmer)
+range(mu_abs_2344_perkmer)
+range(mu_abs_2931_perkmer)
+range(mu_abs_2937_perkmer)
+```
+# Normalize mutation rates for each ancestor   
+
+```{r}
+# make matrices of mutation rates normalized by the initial abundance of the kmer
+
+# first get the abundance averages of all kmers
+abundance_avg_1373 <- colMeans(data_1373[,common.kmer.indexes_1373])
+abundance_avg_1952 <- colMeans(data_1952[,common.kmer.indexes_1952])
+abundance_avg_2342 <- colMeans(data_2342[,common.kmer.indexes_2342])
+abundance_avg_2344 <- colMeans(data_2344[,common.kmer.indexes_2344])
+abundance_avg_2931 <- colMeans(data_2931[,common.kmer.indexes_2931])
+abundance_avg_2937 <- colMeans(data_2937[,common.kmer.indexes_2937])
+
+colnames(data_1373[,common.kmer.indexes_1373])
+names(abundance_avg_1373) # these are in the same order
+
+# now make the matrices
+mu_absnorm_1373 <- t (t(mu_abs_1373)/abundance_avg_1373)
+mu_absnorm_1952 <- t (t(mu_abs_1952)/abundance_avg_1952)
+mu_absnorm_2342 <- t (t(mu_abs_2342)/abundance_avg_2342)
+mu_absnorm_2344 <- t (t(mu_abs_2344)/abundance_avg_2344)
+mu_absnorm_2931 <- t (t(mu_abs_2931)/abundance_avg_2931)
+mu_absnorm_2937 <- t (t(mu_abs_2937)/abundance_avg_2937)
+
+abundance_avg_2931
+names(abundance_avg_2931) == colnames(mu_absnorm_2931)
+names(abundance_avg_1373) == colnames(mu_absnorm_1373)
+
+```
+# Import in the strings of the 18 shared kmers 
+
+```{r}
+# import in the shared common kmers
+shared.common.kmers <- read.csv("~/Documents/AndyLab/Chlamy/R_Analysis/data_in/chlamy_shared.common.kmers.txt", sep="", header=F)
+shared.common.kmers <- as.vector(shared.common.kmers[,1])
+shared.common.kmers
+
+```
+# De novo gain/loss of kmers within the MA experiments  
+## New kmers from each ancestor 
+
+1. For each ancestor, make a matrix with all the kmers that are present in them.  
+
+```{r}
+# make matrix of all kmers to consider for each ancestor
+# consider all kmers that have at least one MA line with at least 2 copies
+
+# function that generates a matrix containing al kmers that have at least 1 sample with 2 copies
+get_allkmers <- function (kmer_mx, indexes) {
+  all_mx <- as.matrix(kmer_mx[,indexes]) # start with small matrix then add to it
+  for (i in (max(indexes)+1):ncol(kmer_mx)){ ## go through all columns in data
+    counter <- 0
+    for (j in 1:nrow(kmer_mx)) {
+      if (kmer_mx[j,i] > 2 ) {
+        counter <- counter + 1
+      }
+    }
+    if (counter > 0) { ## if there is at least one sample with 2 copies of this kmer, add it to the new matrix
+    all_mx <- cbind(all_mx[, , drop=FALSE], kmer_mx[,i, drop=FALSE])
+  }
+  }
+  return (all_mx)
+}
+
+kmers.all_1373 <- get_allkmers(data_1373, common.kmer.indexes_1373)
+kmers.all_1952 <- get_allkmers(data_1952, common.kmer.indexes_1952)
+kmers.all_2342 <- get_allkmers(data_2342, common.kmer.indexes_2342)
+kmers.all_2344 <- get_allkmers(data_2344, common.kmer.indexes_2344)
+kmers.all_2931 <- get_allkmers(data_2931, common.kmer.indexes_2931)
+kmers.all_2937 <- get_allkmers(data_2937, common.kmer.indexes_2937)
+
+```
+2.  Function that gets new kmers unique to 1 MA line (will just use n=1). Note: repeat for each ancestor. 
+
+```{r}
+get_new_kmers <- function (all_kmer_mx, nlines) {
+  kmers.new <- matrix(nrow=nrow(all_kmer_mx)) # make new empty matrix
+  for (i in 1:ncol(all_kmer_mx)) { ## go through each column of the data
+    uniq <- all_kmer_mx[,i] > 0 # uniq will be true and false 
+    if (sum(uniq)==nlines) { # if only there are nlines true elements, add to matrix
+      kmers.new <- cbind(kmers.new[, , drop=FALSE], all_kmer_mx[,i, drop=FALSE])
+    }
+  }
+  kmers.new <- kmers.new[,2:ncol(kmers.new)] # remove first column, which is all NA
+  return(kmers.new)
+}
+
+unique.kmers_1373  <- get_new_kmers(kmers.all_1373, 1)
+unique.kmers_1373
+colnames(unique.kmers_1373)
+
+unique.kmers_1952  <- get_new_kmers(kmers.all_1952, 1)
+unique.kmers_1952
+colnames(unique.kmers_1952)
+# 8/17 new kmers are in MA 13
+
+intersect(colnames(unique.kmers_1373), colnames(unique.kmers_1952))
+
+unique.kmers_2342  <- get_new_kmers(kmers.all_2342, 1)
+unique.kmers_2342
+colnames(unique.kmers_2342)
+
+unique.kmers_2344  <- get_new_kmers(kmers.all_2344, 1)
+unique.kmers_2344
+colnames(unique.kmers_2344)
+# 2/4 new kmers are in MA 4
+
+# ACG is a new kmer in two independent lineages: 2344, 1373.
+
+unique.kmers_2931  <- get_new_kmers(kmers.all_2931, 1)
+unique.kmers_2931
+colnames(unique.kmers_2931)
+# ACG is new again in this lineage
+# 4/13 new kmers are in MA 15, and one of them has a normalized abundance of 92 copies
+
+unique.kmers_2937  <- get_new_kmers(kmers.all_2937, 1)
+unique.kmers_2937
+colnames(unique.kmers_2937)
+
+## summary: 3-21 unique kmers per ancestral lineage (lots of variation) 
+
+kmers_gained_all <- c( colnames(unique.kmers_1373), colnames(unique.kmers_1952), colnames(unique.kmers_2342), colnames(unique.kmers_2344), colnames(unique.kmers_2931), colnames(unique.kmers_2937) )
+summary(as.factor(kmers_gained_all))
+
+```
+## Kmers LOST during MA  
+
+```{r}
+get_kmers_lost <- function (all_kmer_mx, nlines) {
+  kmers.lost <- matrix(nrow=nrow(all_kmer_mx))
+  for (i in 1:ncol(all_kmer_mx)) { ## go through each column of the data
+    l <- all_kmer_mx[,i] == 0  ## 0 copies
+    p <- all_kmer_mx[,i] > 1 ## present
+    if (sum(l)==nlines && sum(p)==(nrow(all_kmer_mx)-nlines)) { # if there is only nlines line with 0 copies, and all others are present
+      kmers.lost <- cbind(kmers.lost[, , drop=FALSE], all_kmer_mx[,i, drop=FALSE])
+    }
+  }
+  kmers.lost <- kmers.lost[,2:ncol(kmers.lost)] # first column is NA
+}
+
+kmers.lost_1373 <- get_kmers_lost(kmers.all_1373, 1)
+kmers.lost_1373
+# 9 of the kmers were lost in MA line 4 - lost the poly C repear, among others. 
+colnames(kmers.lost_1373)
+
+kmers.lost_1952 <- get_kmers_lost(kmers.all_1952, 1)
+kmers.lost_1952
+colnames(kmers.lost_1952)
+# total of 33 kmers were lost. 25 of them were lost in MA line 8
+
+kmers.lost_2342 <- get_kmers_lost(kmers.all_2342, 1)
+kmers.lost_2342
+colnames(kmers.lost_2342)
+# 10/17 lost in MA line 3.
+
+# the C repeat is highly variable here.
+
+kmers.lost_2344 <- get_kmers_lost(kmers.all_2344, 1)
+kmers.lost_2344
+colnames(kmers.lost_2344)
+# MA line 4 lost 4 and MA line 6 lost 4 (total 14)
+
+kmers.lost_2931 <- get_kmers_lost(kmers.all_2931, 1)
+kmers.lost_2931
+colnames(kmers.lost_2931)
+# no MA lines are standing out as losing a lot of kmers.
+
+kmers.lost_2937 <- get_kmers_lost(kmers.all_2937, 1)
+kmers.lost_2937
+colnames(kmers.lost_2937)
+# only 5 lost here, all in different MA lines
+
+kmers_lost_all <- c( colnames(kmers.lost_1373), colnames(kmers.lost_1952), colnames(kmers.lost_2342), colnames(kmers.lost_2344), colnames(kmers.lost_2931), colnames(kmers.lost_2937) )
+summary(as.factor(kmers_lost_all))
+
+
+```
+# Get the perline normalized mutation rates  
+
+```{r}
+mu_absnorm_perline_1373 <- rowMeans(mu_absnorm_1373)
+names(mu_absnorm_perline_1373) <- as.integer(substr(names(mu_absnorm_perline_1373), start=11, stop=12))
+
+# ensure that in proper order for comparison
+mu_absnorm_perline_1952 <- rowMeans(mu_absnorm_1952) 
+names(mu_absnorm_perline_1952) <- as.integer(substr(names(mu_absnorm_perline_1952), start=11, stop=12))
+mu_absnorm_perline_2342 <- rowMeans(mu_absnorm_2342)
+names(mu_absnorm_perline_2342) <- as.integer(substr(names(mu_absnorm_perline_2342), start=11, stop=12))
+mu_absnorm_perline_2344 <- rowMeans(mu_absnorm_2344)
+names(mu_absnorm_perline_2344) <- as.integer(substr(names(mu_absnorm_perline_2344), start=11, stop=12))
+mu_absnorm_perline_2931 <- rowMeans(mu_absnorm_2931)
+names(mu_absnorm_perline_2931) <- as.integer(substr(names(mu_absnorm_perline_2931), start=11, stop=12))
+mu_absnorm_perline_2937 <- rowMeans(mu_absnorm_2937)
+names(mu_absnorm_perline_2937) <- as.integer(substr(names(mu_absnorm_perline_2937), start=11, stop=12))
+```
+## Are the same MA lines tending to have the high mutation rates across all kmers?  
+
+```{r}
+# function that returns the top x MA lines for each kmer
+get_highest <- function (mu_mx, x) {
+  top_list <- list()
+  for (i in 1:ncol(mu_mx)) {
+    highest <- tail(sort(mu_mx[,i]),x)
+    top_list[[i]] <- highest
+  }
+  return(top_list)
+}
+
+#Counts the number of times MA lines are within the highest
+summarize_highest <- function(highest_list) {
+  lines <- c()
+  for (i in 1:length(highest_list)) {
+    lines <- c(lines, names(highest_list[[i]]))
+    }
+  y <- summary(as.factor(lines))
+  return(y)
+}
+# returns the kmer indices a given MA line is the highest in
+highest_indices <- function (highest_list, MA_line) {
+  indices <- c()
+  for (i in 1:length(highest_list)) {
+    x <- names(highest_list[[i]])
+    if (MA_line %in% x) {
+      indices <- c(indices, i)
+    }
+  }
+  return(indices)
+}
+
+highest_1373 <- get_highest(mu_abs_1373, 2)
+summarize_highest(highest_1373)
+length(highest_1373)
+# how much higher is the MA line with the highest mutation rate than the average of the MA lines from that ancestor?
+
+(mu_absnorm_perline_1373["10"] - mean(mu_absnorm_perline_1373))/mean(mu_absnorm_perline_1373)
+(mu_absnorm_perline_1373["11"] - mean(mu_absnorm_perline_1373))/mean(mu_absnorm_perline_1373)
+
+# non-absolute - directionality in the highest indices
+length(which( mu_1373["CC-1373_MA10",] > 0))
+length(which( mu_1373["CC-1373_MA10",] <= 0))
+length(which( mu_1373["CC-1373_MA11",] > 0))
+length(which( mu_1373["CC-1373_MA11",] <= 0))
+
+length(which (mu_1373["CC-1373_MA10",highest_indices(highest_1373, "CC-1373_MA10")] > 0))
+length(which (mu_1373["CC-1373_MA10",highest_indices(highest_1373, "CC-1373_MA10")] <= 0))
+length(which (mu_1373["CC-1373_MA11",highest_indices(highest_1373, "CC-1373_MA11")] > 0))
+length(which (mu_1373["CC-1373_MA11",highest_indices(highest_1373, "CC-1373_MA11")] <= 0))
+
+highest_1952 <- get_highest(mu_abs_1952, 2)
+summarize_highest(highest_1952)
+length(highest_1952)
+# percent higher than mean in MA 8
+(mu_absnorm_perline_1952["8"] - mean(mu_absnorm_perline_1952))/mean(mu_absnorm_perline_1952)
+
+# how much higher than the mean of the other lines within the group
+mean(mu_absnorm_perline_1952[-(which(names(mu_absnorm_perline_1952)=="8"))])
+mu_absnorm_perline_1952["8"]
+mu_absnorm_perline_1952["8"]/mean(mu_absnorm_perline_1952[-(which(names(mu_absnorm_perline_1952)=="8"))])
+
+# non-absolute - directionality
+length(which( mu_1952["CC-1952_MA8",] > 0))
+length(which( mu_1952["CC-1952_MA8",] <= 0))
+
+length(which (mu_1952["CC-1952_MA8",highest_indices(highest_1952, "CC-1952_MA8")] > 0))
+length(which (mu_1952["CC-1952_MA8",highest_indices(highest_1952, "CC-1952_MA8")] <= 0))
+
+highest_2342 <- get_highest(mu_abs_2342, 2)
+summarize_highest(highest_2342)
+length(highest_2342)
+(mu_absnorm_perline_2342["3"] - mean(mu_absnorm_perline_2342))/mean(mu_absnorm_perline_2342)
+(mu_absnorm_perline_2342["4"] - mean(mu_absnorm_perline_2342))/mean(mu_absnorm_perline_2342)
+length(which( mu_2342["CC-2342_MA3",] > 0))
+length(which( mu_2342["CC-2342_MA3",] <= 0))
+length(which( mu_2342["CC-2342_MA4",] > 0))
+length(which( mu_2342["CC-2342_MA4",] <= 0))
+
+length(which (mu_2342["CC-2342_MA3",highest_indices(highest_2342, "CC-2342_MA3")] > 0))
+length(which (mu_2342["CC-2342_MA3",highest_indices(highest_2342, "CC-2342_MA3")] <= 0))
+length(which (mu_2342["CC-2342_MA4",highest_indices(highest_2342, "CC-2342_MA4")] > 0))
+length(which (mu_2342["CC-2342_MA4",highest_indices(highest_2342, "CC-2342_MA4")] <= 0))
+
+
+highest_2344 <- get_highest(mu_abs_2344, 2)
+summarize_highest(highest_2344)
+length(highest_2344)
+(mu_absnorm_perline_2344["11"] - mean(mu_absnorm_perline_2344))/mean(mu_absnorm_perline_2344)
+length(which( mu_2344["CC-2344_MA11",] > 0))
+length(which( mu_2344["CC-2344_MA11",] <= 0))
+
+length(which (mu_2344["CC-2344_MA11",highest_indices(highest_2344, "CC-2344_MA11")] > 0))
+length(which (mu_2344["CC-2344_MA11",highest_indices(highest_2344, "CC-2344_MA11")] <= 0))
+
+
+highest_2931 <- get_highest(mu_abs_2931, 2)
+summarize_highest(highest_2931)
+length(highest_2931)
+(mu_absnorm_perline_2931["4"] - mean(mu_absnorm_perline_2931))/mean(mu_absnorm_perline_2931)
+(mu_absnorm_perline_2931["12"] - mean(mu_absnorm_perline_2931))/mean(mu_absnorm_perline_2931)
+length(which( mu_2931["CC-2931_MA4",] > 0))
+length(which( mu_2931["CC-2931_MA4",] <= 0))
+length(which( mu_2931["CC-2931_MA12",] > 0))
+length(which( mu_2931["CC-2931_MA12",] <= 0))
+
+length(which (mu_2931["CC-2931_MA4",highest_indices(highest_2931, "CC-2931_MA4")] > 0))
+length(which (mu_2931["CC-2931_MA4",highest_indices(highest_2931, "CC-2931_MA4")] <= 0))
+length(which (mu_2931["CC-2931_MA12",highest_indices(highest_2931, "CC-2931_MA12")] > 0))
+length(which (mu_2931["CC-2931_MA12",highest_indices(highest_2931, "CC-2931_MA12")] <= 0))
+
+highest_2937 <- get_highest(mu_abs_2937, 2)
+summarize_highest(highest_2937)
+length(highest_2937)
+(mu_absnorm_perline_2937["8"] - mean(mu_absnorm_perline_2937))/mean(mu_absnorm_perline_2937)
+length(which( mu_2937["CC-2937_MA8",] > 0))
+length(which( mu_2937["CC-2937_MA8",] <= 0))
+
+length(which (mu_2937["CC-2937_MA8",highest_indices(highest_2937, "CC-2937_MA8")] > 0))
+length(which (mu_2937["CC-2937_MA8",highest_indices(highest_2937, "CC-2937_MA8")] <= 0))
+
+# for presentation
+plot(mu_absnorm_perline_1952, xlab="MA line number", ylab="normalized per line mutation rate", pch=19, col="dodgerblue")
+abline(h=mean(mu_absnorm_perline_1952[-(which(names(mu_absnorm_perline_1952)=="8"))]), lty=2)
+
+```
+# Is there a mutation rate difference in chloroplast-like versus nuclear-like?  
+
+## get the per kmer mutation rates, categorize into chloroplast-like and nuclear-like
+  -These classifications are based on the GC content / length analysis in FileS1
+```{r}
+# get per kmer mutation rates.
+mu_absnorm_perkmer_1373 <- colMeans(mu_absnorm_1373)
+mu_absnorm_perkmer_1373
+
+cp_kmers_1373 <- c("AAATACCTTACGGGAATAT", "AAATAACAAT", "AAATACTTACGGGAATAT")
+cp_mudf_1373 <- data.frame(as.vector(mu_absnorm_1373[,cp_kmers_1373]), "Chloroplast")
+colnames(cp_mudf_1373) <- c("mu", "origin")
+
+nuc_kmers_1373 <- mu_absnorm_1373[,!(colnames(mu_absnorm_1373) %in% cp_kmers_1373)]
+nuc_mudf_1373 <- data.frame(as.vector(nuc_kmers_1373), "Nuclear")
+colnames(nuc_mudf_1373) <- c("mu", "origin")
+
+##
+mu_absnorm_perkmer_1952 <- colMeans(mu_absnorm_1952)
+mu_absnorm_perkmer_1952
+
+cp_kmers_1952 <- c("AATAGATAATAT", "AAATACTTACGGGAATAT", "AAAATATATAAATATAGCT", "AAAGAAGTATATAAAT", "AAATTTATATACTCC", "AAATACCTTACGGGAATAT")
+cp_mudf_1952 <- data.frame(as.vector(mu_absnorm_1952[,cp_kmers_1952]), "Chloroplast")
+colnames(cp_mudf_1952) <- c("mu", "origin")
+
+nuc_kmers_1952 <- mu_absnorm_1952[,!(colnames(mu_absnorm_1952) %in% cp_kmers_1952)]
+nuc_mudf_1952 <- data.frame(as.vector(nuc_kmers_1952), "Nuclear")
+colnames(nuc_mudf_1952) <- c("mu", "origin")
+
+##
+mu_absnorm_perkmer_2342 <- colMeans(mu_absnorm_2342)
+mu_absnorm_perkmer_2342
+
+cp_kmers_2342 <- c("AAAAAGGTAAATGTATTTAT")
+cp_mudf_2342 <- data.frame(as.vector(mu_absnorm_2342[,cp_kmers_2342]), "Chloroplast")
+colnames(cp_mudf_2342) <- c("mu", "origin")
+
+nuc_kmers_2342 <- mu_absnorm_2342[,!(colnames(mu_absnorm_2342) %in% cp_kmers_2342)]
+nuc_mudf_2342 <- data.frame(as.vector(nuc_kmers_2342), "Nuclear")
+colnames(nuc_mudf_2342) <- c("mu", "origin")
+
+##
+
+mu_absnorm_perkmer_2344 <- colMeans(mu_absnorm_2344)
+mu_absnorm_perkmer_2344
+
+cp_kmers_2344 <- c("AAAATAAAGTGT", "AAATACCTTACGGGAATAT", "AAATTTATATACTCC")
+cp_mudf_2344 <- data.frame(as.vector(mu_absnorm_2344[,cp_kmers_2344]), "Chloroplast")
+colnames(cp_mudf_2344) <- c("mu", "origin")
+
+nuc_kmers_2344 <- mu_absnorm_2344[,!(colnames(mu_absnorm_2344) %in% cp_kmers_2344)]
+nuc_mudf_2344 <- data.frame(as.vector(nuc_kmers_2344), "Nuclear")
+colnames(nuc_mudf_2344) <- c("mu", "origin")
+
+##
+
+mu_absnorm_perkmer_2931 <- colMeans(mu_absnorm_2931)
+mu_absnorm_perkmer_2931
+
+cp_kmers_2931 <- c("AAAAAGGTAAATGTATTTAT", "AAATAGCAGTATAT", "AAAATAAAGTGT")
+cp_mudf_2931 <- data.frame(as.vector(mu_absnorm_2931[,cp_kmers_2931]), "Chloroplast")
+colnames(cp_mudf_2931) <- c("mu", "origin")
+
+nuc_kmers_2931 <- mu_absnorm_2931[,!(colnames(mu_absnorm_2931) %in% cp_kmers_2931)]
+nuc_mudf_2931 <- data.frame(as.vector(nuc_kmers_2931), "Nuclear")
+colnames(nuc_mudf_2931) <- c("mu", "origin")
+
+##
+mu_absnorm_perkmer_2937 <- colMeans(mu_absnorm_2937)
+mu_absnorm_perkmer_2937
+
+cp_kmers_2937 <- c("AAATACTTACGGGAATAT", "AAATACCTTACGGGAATAT")
+cp_mudf_2937 <- data.frame(as.vector(mu_absnorm_2937[,cp_kmers_2937]), "Chloroplast")
+colnames(cp_mudf_2937) <- c("mu", "origin")
+
+nuc_kmers_2937 <- mu_absnorm_2937[,!(colnames(mu_absnorm_2937) %in% cp_kmers_2937)]
+nuc_mudf_2937 <- data.frame(as.vector(nuc_kmers_2937), "Nuclear")
+colnames(nuc_mudf_2937) <- c("mu", "origin")
+
+# now combine all the dataframes and make a boxplot
+
+nuc.cp_df_all <- rbind (cp_mudf_1373, cp_mudf_1952, cp_mudf_2342, cp_mudf_2344, cp_mudf_2931, cp_mudf_2937, nuc_mudf_1373, nuc_mudf_1952, nuc_mudf_2342, nuc_mudf_2344, nuc_mudf_2931, nuc_mudf_2937)
+boxplot (mu ~ origin, data=nuc.cp_df_all, las=1, cex.axis=0.8, ylab="Copies changed/gen/copy", outline=F)
+# chloroplast-like repeats have mutation rates a bit higher (by ANOVA)
+
+nuc.cp_model <- lm(formula = mu ~ origin, data = nuc.cp_df_all)
+summary(nuc.cp_model)
+aov(nuc.cp_model)
+
+
+```
+# Is there variation in mutation rate across ancestors and kmers?  
+
+```{r}
+make_df_from_matrix <- function(mx, anc) {
+  kmer.names <- c()
+  for (i in 1:ncol(mx)) {
+  kmer.names <- c(kmer.names, rep(colnames(mx)[i], times=nrow(mx)))
+  }
+  Mu <- c(mx)
+  Ancestor <- anc
+  df1 <- data.frame (Mu, kmer.names, Ancestor)
+  df2 <- df1[which(as.vector(df1$kmer.names) %in% shared.common.kmers),]
+  return(df2)
+}
+
+mu_absnorm_df_1373 <- make_df_from_matrix(mu_absnorm_1373, "CC-1373")
+mu_absnorm_df_1952 <- make_df_from_matrix(mu_absnorm_1952, "CC-1952")
+mu_absnorm_df_2342 <- make_df_from_matrix(mu_absnorm_2342, "CC-2342")
+mu_absnorm_df_2344 <- make_df_from_matrix(mu_absnorm_2344, "CC-2344")
+mu_absnorm_df_2931 <- make_df_from_matrix(mu_absnorm_2931, "CC-2931")
+mu_absnorm_df_2937 <- make_df_from_matrix(mu_absnorm_2937, "CC-2937")
+
+mu_absnorm_df_complete <- rbind (mu_absnorm_df_1373, mu_absnorm_df_1952, mu_absnorm_df_2342, mu_absnorm_df_2344, mu_absnorm_df_2931, mu_absnorm_df_2937)
+
+(ggplot(mu_absnorm_df_complete, aes(Mu, kmer.names, colour = Ancestor)) + geom_point(size = 0.8)) + ylab("kmer") + xlab("copies/generation/copy")
+
+
+# get summaries - mean for each ancestor
+# min mutation rate of kmer
+
+mu_means_1373 <- colMeans(mu_absnorm_1373)
+mean(mu_means_1373)
+mu_means_1373[which(mu_means_1373==min(mu_means_1373))]
+mu_means_1373[which(mu_means_1373==max(mu_means_1373))]
+
+mu_means_1952 <- colMeans(mu_absnorm_1952)
+mean(mu_means_1952)
+mu_means_1952[which(mu_means_1952==min(mu_means_1952))]
+mu_means_1952[which(mu_means_1952==max(mu_means_1952))]
+
+mu_means_2342 <- colMeans(mu_absnorm_2342)
+mean(mu_means_2342)
+mu_means_2342[which(mu_means_2342==min(mu_means_2342))]
+mu_means_2342[which(mu_means_2342==max(mu_means_2342))]
+
+mu_means_2344 <- colMeans(mu_absnorm_2344)
+mean(mu_means_2344)
+mu_means_2344[which(mu_means_2344==min(mu_means_2344))]
+mu_means_2344[which(mu_means_2344==max(mu_means_2344))]
+
+mu_means_2931 <- colMeans(mu_absnorm_2931)
+mean(mu_means_2931)
+mu_means_2931[which(mu_means_2931==min(mu_means_2931))]
+mu_means_2931[which(mu_means_2931==max(mu_means_2931))]
+mu_means_2931["C"]
+
+mu_means_2937 <- colMeans(mu_absnorm_2937)
+mean(mu_means_2937)
+mu_means_2937[which(mu_means_2937==min(mu_means_2937))]
+mu_means_2937[which(mu_means_2937==max(mu_means_2937))]
+
+
+mean(c(mu_means_1373["C"], mu_means_1952["C"], mu_means_2342["C"], mu_means_2344["C"], mu_means_2931["C"], mu_means_2937["C"]))
+
+mean(c(mu_means_1373["AGC"], mu_means_1952["AGC"], mu_means_2342["AGC"], mu_means_2344["AGC"], mu_means_2931["AGC"], mu_means_2937["AGC"]))
+
+```
+# Is there a relationship between SNP rate and kmer mutation rate? Or indel rate and kmer mutation rate?  
+
+## Get average mutation rates (across all kmers) for each MA subline  
+
+```{r}
+mu_absnorm_perline_1373 <- rowMeans(mu_absnorm_1373)
+names(mu_absnorm_perline_1373) <- as.integer(substr(names(mu_absnorm_perline_1373), start=11, stop=12))
+
+# ensure that in proper order for comparison
+mu_absnorm_perline_1952 <- rowMeans(mu_absnorm_1952) 
+names(mu_absnorm_perline_1952) <- as.integer(substr(names(mu_absnorm_perline_1952), start=11, stop=12))
+mu_absnorm_perline_2342 <- rowMeans(mu_absnorm_2342)
+names(mu_absnorm_perline_2342) <- as.integer(substr(names(mu_absnorm_perline_2342), start=11, stop=12))
+mu_absnorm_perline_2344 <- rowMeans(mu_absnorm_2344)
+names(mu_absnorm_perline_2344) <- as.integer(substr(names(mu_absnorm_perline_2344), start=11, stop=12))
+mu_absnorm_perline_2931 <- rowMeans(mu_absnorm_2931)
+names(mu_absnorm_perline_2931) <- as.integer(substr(names(mu_absnorm_perline_2931), start=11, stop=12))
+mu_absnorm_perline_2937 <- rowMeans(mu_absnorm_2937)
+names(mu_absnorm_perline_2937) <- as.integer(substr(names(mu_absnorm_perline_2937), start=11, stop=12))
+
+```
+# Compare to single nucleotide mutation (SNM) rates in these same lines, from Ness et al. (2015) Genome Research.  
+
+```{r}
+SNMrates <- read.delim("~/Documents/AndyLab/Chlamy/RobData/MA_SNMrate.txt")
+
+nrow(SNMrates)
+# Note: 3 MA lines were excluded from mutation rate analysis because either they did not have the number of generations estimated, or they were suspected of possibly being contaminated witht the respective ancestral lineage 
+to_exclude <- c(which(SNMrates$MA_line=="CC1373_15"), which(SNMrates$MA_line=="CC2342_1"), which(SNMrates$MA_line=="CC2342_2"), which(SNMrates$MA_line=="CC2342_14"))
+SNMrates <- SNMrates[-to_exclude,]
+
+line_names <- as.vector(SNMrates[,1]) 
+line_names
+SNMrates <- as.vector(SNMrates[,2])
+names(SNMrates) <- line_names
+
+
+# break apart for each one, order them based on number
+SNMrates_1373 <- SNMrates[grepl("CC1373", names(SNMrates), fixed=FALSE)]
+names(SNMrates_1373) <- substr(names(SNMrates_1373), start=8, stop=9)
+SNMrates_1373 <- SNMrates_1373[order(as.integer(names(SNMrates_1373)))]
+
+SNMrates_1952 <- SNMrates[grepl("CC1952", names(SNMrates), fixed=FALSE)]
+names(SNMrates_1952) <- substr(names(SNMrates_1952), start=8, stop=9)
+SNMrates_1952 <- SNMrates_1952[order(as.integer(names(SNMrates_1952)))]
+
+SNMrates_2342 <- SNMrates[grepl("CC2342", names(SNMrates), fixed=FALSE)]
+names(SNMrates_2342) <- substr(names(SNMrates_2342), start=8, stop=9)
+SNMrates_2342 <- SNMrates_2342[order(as.integer(names(SNMrates_2342)))]
+
+SNMrates_2344 <- SNMrates[grepl("CC2344", names(SNMrates), fixed=FALSE)]
+names(SNMrates_2344) <- substr(names(SNMrates_2344), start=8, stop=9)
+SNMrates_2344 <- SNMrates_2344[order(as.integer(names(SNMrates_2344)))]
+
+SNMrates_2931 <- SNMrates[grepl("CC2931", names(SNMrates), fixed=FALSE)]
+names(SNMrates_2931) <- substr(names(SNMrates_2931), start=8, stop=9)
+SNMrates_2931 <- SNMrates_2931[order(as.integer(names(SNMrates_2931)))]
+
+SNMrates_2937 <- SNMrates[grepl("CC2937", names(SNMrates), fixed=FALSE)]
+names(SNMrates_2937) <- substr(names(SNMrates_2937), start=8, stop=9)
+SNMrates_2937 <- SNMrates_2937[order(as.integer(names(SNMrates_2937)))]
+
+names(mu_absnorm_perline_1373)==names(SNMrates_1373)
+names(mu_absnorm_perline_1952)==names(SNMrates_1952)
+names(mu_absnorm_perline_2342)==names(SNMrates_2342)
+names(mu_absnorm_perline_2344)==names(SNMrates_2344)
+names(mu_absnorm_perline_2931)==names(SNMrates_2931)
+names(mu_absnorm_perline_2937)==names(SNMrates_2937)
+
+SNMrates_all <- c(SNMrates_1373, SNMrates_1952, SNMrates_2342, SNMrates_2344, SNMrates_2931, SNMrates_2937)
+length(SNMrates_all)
+mu_absnorm_perline_all <- c(mu_absnorm_perline_1373, mu_absnorm_perline_1952, mu_absnorm_perline_2342, mu_absnorm_perline_2344, mu_absnorm_perline_2931, mu_absnorm_perline_2937)
+
+hist(mu_absnorm_perline_all)
+
+summary(lm(formula = SNMrates_all ~ mu_absnorm_perline_all))
+cor.test(y=mu_absnorm_perline_all, x=SNMrates_all )
+# Not a strong relationship between SNM rate and kmer expansion/contraction rate
+```
+# Now see if there is a relationship between indel rate and kmer mutation rate, indel data are also from Ness et al. (2015) Genome Research.  
+
+```{r}
+indelrates <- read.delim("~/Documents/AndyLab/Chlamy/RobData/MA_indelrate.txt")
+indelrates
+nrow(indelrates)
+to_exclude <- c(which(indelrates$MA_line=="CC1373_15"), which(indelrates$MA_line=="CC2342_1"), which(indelrates$MA_line=="CC2342_2"), which(indelrates$MA_line=="CC2342_14"))
+indelrates <- indelrates[-to_exclude,]
+
+line_names <- as.vector(indelrates[,1]) 
+line_names
+indelrates <- as.vector(indelrates[,2])
+names(indelrates) <- line_names
+indelrates
+
+# break apart for each one, order them based on number
+indelrates_1373 <- indelrates[grepl("CC1373", names(indelrates), fixed=FALSE)]
+names(indelrates_1373) <- substr(names(indelrates_1373), start=8, stop=9)
+indelrates_1373 <- indelrates_1373[order(as.integer(names(indelrates_1373)))]
+
+indelrates_1952 <- indelrates[grepl("CC1952", names(indelrates), fixed=FALSE)]
+names(indelrates_1952) <- substr(names(indelrates_1952), start=8, stop=9)
+indelrates_1952 <- indelrates_1952[order(as.integer(names(indelrates_1952)))]
+
+indelrates_2342 <- indelrates[grepl("CC2342", names(indelrates), fixed=FALSE)]
+names(indelrates_2342) <- substr(names(indelrates_2342), start=8, stop=9)
+indelrates_2342 <- indelrates_2342[order(as.integer(names(indelrates_2342)))]
+
+indelrates_2344 <- indelrates[grepl("CC2344", names(indelrates), fixed=FALSE)]
+names(indelrates_2344) <- substr(names(indelrates_2344), start=8, stop=9)
+indelrates_2344 <- indelrates_2344[order(as.integer(names(indelrates_2344)))]
+
+indelrates_2931 <- indelrates[grepl("CC2931", names(indelrates), fixed=FALSE)]
+names(indelrates_2931) <- substr(names(indelrates_2931), start=8, stop=9)
+indelrates_2931 <- indelrates_2931[order(as.integer(names(indelrates_2931)))]
+
+indelrates_2937 <- indelrates[grepl("CC2937", names(indelrates), fixed=FALSE)]
+names(indelrates_2937) <- substr(names(indelrates_2937), start=8, stop=9)
+indelrates_2937 <- indelrates_2937[order(as.integer(names(indelrates_2937)))]
+
+indelrates_all <- c(indelrates_1373, indelrates_1952, indelrates_2342, indelrates_2344, indelrates_2931, indelrates_2937)
+
+
+names(SNMrates_all)
+ancestor_names <- c(rep("CC-1373", times=12), rep("CC-1952", times=14), rep("CC-2342", times=11), rep("CC-2344", times=15), rep("CC-2931", times=14), rep("CC-2937", times=15) )
+length(ancestor_names)
+
+mus_comp <- data.frame(Ancestor=ancestor_names, SNM=SNMrates_all, kmer=mu_absnorm_perline_all, indel=indelrates_all )
+colnames(mus_comp) <- c("Ancestor", "SNM", "kmer", "indel")
+
+summary(lm(formula = indelrates_all ~ mu_absnorm_perline_all))
+cor.test(y=mu_absnorm_perline_all, x=indelrates_all )
+# no relationship at all with indel rates.
+
+```
+## Plot the relationship between repeat expansion/contraction rate and SNM, and indel mutation rates. 
+
+```{r}
+
+ggplot(mus_comp, aes(color=Ancestor, x=SNM, y=kmer)) + 
+  geom_point(alpha=0.8, size=2) + 
+  ylab("Repeat mutation rate") +
+  xlab("SNM rate") +
+  theme_light(base_size = 14) +
+  theme(legend.position="none")
+
+ggplot(mus_comp, aes(color=Ancestor, x=indel, y=kmer)) + 
+  geom_point(alpha=0.8, size=2) + 
+  ylab("Repeat mutation rate") +
+  xlab("INDEL rate") +
+  theme_light(base_size = 14) +
+  theme(legend.position="none")
+
+
+```
+# Now look at the correlation in expansion and contraction of kmers across the MA lines of each ancestor  
+Order the kmers by sequence relatedness, based on the relatedness network diagram (Figure 3 in manuscript)  
+
+```{r}
+# which kmers to compare in network?
+which(colnames(data_sorted)=="AAATTTATATACTCC")
+
+# Look at the non-private kmers that are in the relatedness network
+common.kmer.union.indexes_ordered <- c(3, 1, 17, 9, 28, 2, 24,5,16, 22, 35, 36, 37, 34, 48, 18, 12, 6, 4, 8, 33, 29, 19, 25, 14, 20, 27, 10, 23)
+
+colnames(data_sorted)[common.kmer.union.indexes_ordered]
+# great, these are the indexes I want
+
+par(mar=c(4,5,8,5))
+kmer.union.deviation_1373 <- get_deviation(data_1373, common.kmer.union.indexes_ordered)
+colnames(kmer.union.deviation_1373) <- colnames(data_sorted)[common.kmer.union.indexes_ordered]
+mu.union_1373 <- kmer.union.deviation_1373/generations_1373
+mucorr_1373 <- cor(mu.union_1373)
+corrplot(mucorr_1373, type="upper", order="original", tl.col="black", tl.cex=0.6, tl.srt=90)
+
+kmer.union.deviation_1952 <- get_deviation(data_1952, common.kmer.union.indexes_ordered)
+colnames(kmer.union.deviation_1952) <- colnames(data_sorted)[common.kmer.union.indexes_ordered]
+mu.union_1952 <- kmer.union.deviation_1952/generations_1952
+mucorr_1952 <- cor(mu.union_1952)
+corrplot(mucorr_1952, type="upper", order="original", tl.col="black", tl.cex=0.6, tl.srt=90)
+
+kmer.union.deviation_2342 <- get_deviation(data_2342, common.kmer.union.indexes_ordered)
+colnames(kmer.union.deviation_2342) <- colnames(data_sorted)[common.kmer.union.indexes_ordered]
+mu.union_2342 <- kmer.union.deviation_2342/generations_2342
+mucorr_2342 <- cor(mu.union_2342)
+corrplot(mucorr_2342, type="upper", order="original", tl.col="black", tl.cex=0.6, tl.srt=90)
+
+
+kmer.union.deviation_2344 <- get_deviation(data_2344, common.kmer.union.indexes_ordered)
+colnames(kmer.union.deviation_2344) <- colnames(data_sorted)[common.kmer.union.indexes_ordered]
+mu.union_2344 <- kmer.union.deviation_2344/generations_2344
+mucorr_2344 <- cor(mu.union_2344)
+corrplot(mucorr_2344, type="upper", order="original", tl.col="black", tl.cex=0.6, tl.srt=90)
+
+kmer.union.deviation_2931 <- get_deviation(data_2931, common.kmer.union.indexes_ordered)
+colnames(kmer.union.deviation_2931) <- colnames(data_sorted)[common.kmer.union.indexes_ordered]
+mu.union_2931 <- kmer.union.deviation_2931/generations_2931
+mucorr_2931 <- cor(mu.union_2931)
+corrplot(mucorr_2931, type="upper", order="original", tl.col="black", tl.cex=0.6, tl.srt=90)
+
+kmer.union.deviation_2937 <- get_deviation(data_2937, common.kmer.union.indexes_ordered)
+colnames(kmer.union.deviation_2937) <- colnames(data_sorted)[common.kmer.union.indexes_ordered]
+mu.union_2937 <- kmer.union.deviation_2937/generations_2937
+mucorr_2937 <- cor(mu.union_2937)
+corrplot(mucorr_2937, type="upper", order="original", tl.col="black", tl.cex=0.6, tl.srt=90)
+```

@@ -225,9 +225,6 @@ count_int_reads_telomere <- function(totalreadsfile, inputrep, kmer) {
   print(res_final)
 }
 
-count_int_reads_telomere("ERR968344.total.reads.txt", CC_1373_MA7.rep, "AAATAACAAT")
-count_int_reads_telomere("ERR968344.total.reads.txt", CC_1373_MA7.rep, "AAATACCTTACGGGAATAT")
-count_int_reads_telomere("ERR968344.total.reads.txt", CC_1373_MA7.rep, "AAATACTTACGGGAATAT")
 
 cp_kmers_1373 <- c("AAATACCTTACGGGAATAT", "AAATAACAAT", "AAATACTTACGGGAATAT")
 for (i in 1:length(cp_kmers_1373)) {

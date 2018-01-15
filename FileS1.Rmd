@@ -1,79 +1,118 @@
 ---
 title: "File S1"
-author: "Jullien Flynn"
+author: "Jullien Flynn; updated 1.12.18 by Sarah Lower"
 date: '2017-08-01'
 output:
   html_document:
+    code_folding: hide
+    df_print: paged
+    fig_caption: yes
+    number_section: yes
+    theme: cerulean
     toc: yes
+    toc_depth: 4
+  pdf_document:
+    toc: yes
+    toc_depth: '5'
+editor_options: 
+  chunk_output_type: console
 ---
+
+<style>
+
+table, td, th {
+  border: none;
+  padding-left: 1em;
+  padding-right: 1em;
+  min-width: 50%;
+  margin-left: auto;
+  margin-right: auto;
+  margin-top: 1em;
+  margin-bottom: 1em;
+}
+
+</style>
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
+
+
 This is the first part of analysis including for the paper "Rates and patterns of mutation in tandem repetitive DNA in six independent lineages of Chamydomonas reinhardtii". 
 This file goes through the genome-wide description of tandem repeats in 6 different strains of Chlamydomonas reinhardtii.  
 
-First, load necessary libraries:  
+# Ready the workspace and load necessary libraries  
 
 ```{r, message=FALSE, warning=FALSE, include=FALSE}
 remove(list = ls())
-library(adegenet)
+library(stargazer)
 library(ggplot2)
+library(reshape2)
+library(ggbiplot)
 library(ape)
 library(Biostrings)
-library(ggbiplot)
-library(corrplot)
-source("http://bioconductor.org/biocLite.R")
-require(Biostrings)
-```
-# Look at proportion of reads containing repeats 
+sessionInfo()
 
+```
+
+# Non-normalized dataset analysis
+## Read in summary dataset
+This will read in the file "reads.summary.txt" containing the columns:  
+a. File = MA line name (fastq file name)  
+b. Repreads = Number of reads with repeats as identified by k-seek  
+c. Totreads = Total number of reads sequenced for that line  
+d. Proportion = Repreads/totreads (percent repetitive)  
 ```{r}
-reads.summary <- read.delim("~/Documents/AndyLab/Chlamy/R_Analysis/data_in/reads.summary.txt", header=FALSE)
+setwd("/Users/ses425/Dropbox/Cornell/1.Projects/1.Chlamy-USE_BOX_FOLDER_INSTEAD/Manuscript/GitHub/Chlamy-repeats-mutation-master")
+reads.summary <- read.delim("./Input_FileS1/reads.summary.txt", header=FALSE)
 colnames(reads.summary) <- c("File", "Repreads", "Totreads", "Proportion")
-plot(x=reads.summary$Totreads, y=reads.summary$Repreads, xlab="Total reads", ylab="Reads with tandem repeats")
+```
+
+## Summarize the data
+We assessed a total of **`r sum(as.numeric(reads.summary$Totreads))`** reads.  
+The total number of repetitive reads (uncorrected) is **`r sum(as.numeric(reads.summary$Repreads))`**.  
+The mean proportion of reads that are repetitive per sample (not corrected) is **`r round((mean(reads.summary$Proportion))*100, digits=2)`**.  
+
+### Distribution of proportion repetitive
+```{r}
 hist(reads.summary$Proportion)
+```
+
+## Q: Is there a relationship between total number of reads and reads with repeats?
+If yes, this confirms that we need to correct for sequencing effort across libraries.
+
+### A: Plot of repetitive reads vs total reads
+```{r}
+plot(x=reads.summary$Totreads, y=reads.summary$Repreads, xlab="Total reads", ylab="Reads with tandem repeats")
+```
+
+###A: Testing for statistically-significant relationship
+```{r}
 summary(lm(formula = reads.summary$Repreads ~ reads.summary$Totreads))
 # p < 2.2e-16, R^2 = 0.88
-
-# summaries:
-sum(as.numeric(reads.summary$Totreads))
-(mean(reads.summary$Proportion))*100
-sum(as.numeric(reads.summary$Repreads))
 ```
-# Load in and process dataset  
-This dataset is the counts of all kmers found by k-Seek in the 85 MA lines analyzed. Before running k-Seek, the data have been trimmed using trimmomatic to remove low quality sequences. The kmer counts have been normalized by GC content and depth. 
+**Yes.** There is a significant relationship that needs to be corrected.
+
+# Normalized dataset analysis
+## Load in and process dataset  
+This dataset is the counts of all kmers found by k-Seek in the 85 MA lines analyzed. Before running k-Seek, the data have been trimmed using trimmomatic to remove low quality sequences. The kmer counts have been normalized by kmer sequence GC content and sequencing library depth. Here we add sample names to each library and sort the kmers by mean abundance. We will be working with the **data_sorted** file (kmers sorted by their mean abundance).
 
 ```{r}
-data <- read.csv('/Users/jullienflynn/Documents/AndyLab/Chlamy/R_Analysis/data_in/Chlamy_trimmed_GCcorr.compiled')
+#read in data, give appropriate rownames
+data <- read.csv('./Input_FileS1/Chlamy_trimmed_GCcorr.compiled')
 file_names <- as.vector(data$X)
 rownames(data) <- file_names
 data[,1] <- NULL
 
 # match the file names to the names of the lines
-Chlamy_file_info <- read.delim("~/Documents/AndyLab/Chlamy/R_Analysis/info/Chlamy_file_info.txt", header=FALSE)
+Chlamy_file_info <- read.delim("./Input_FileS1/Chlamy_file_info.txt", header=FALSE)
 Chlamy_lines <- as.vector(Chlamy_file_info[,2])
 Chlamy_files <- as.vector(Chlamy_file_info[,1])
 names(Chlamy_lines) <- Chlamy_files
 Chlamy_lines <- as.data.frame(Chlamy_lines)
 
-data_withnames <- merge(data, Chlamy_lines, by=0)
-lines <- data_withnames[,3314]
-data_withnames <- data_withnames[,-c(1,3314)]
-rownames(data_withnames) <- lines
-data_withnames <- as.matrix(data_withnames)
-
-# sort the columns (kmers) by their mean abundance
-kmer_means <- colMeans(data_withnames)
-data_sorted <- data_withnames[,order(kmer_means, decreasing=T)]
-
-```
-## Quality check of GC correction  
-Some MA lines had their kmer counts corrected strongly down for GC contents ~50%. Check to see if it appears like these MA lines appear to have been over-corrected in the counts of kmers 50%. Look at the AC repeat in particular
-```{r}
 # format the data and name the rows by the MA line ID
 data_withnames <- merge(data, Chlamy_lines, by=0)
-ncol(data_withnames)
 lines <- data_withnames[,3314]
 data_withnames <- data_withnames[,-c(1,3314)]
 rownames(data_withnames) <- lines
@@ -82,15 +121,347 @@ data_withnames <- as.matrix(data_withnames)
 # sort the columns (kmers) by their mean abundance
 kmer_means <- colMeans(data_withnames)
 data_sorted <- data_withnames[,order(kmer_means, decreasing=T)]
+```
 
+## Quality check of GC correction  
+Some MA lines had their kmer counts corrected strongly down for GC contents ~50%. Check to see if it appears like these MA lines appear to have been over-corrected in the counts of kmers 50%. Look at the AC repeat in particular. From below, correction looks good.
+```{r}
 # Some MA lines were strongly corrected near 50% GC - check if this seems reasonable by the corrected copy number  
 data_sorted["CC-2937_MA1", 1:5] 
 data_sorted["CC-2937_MA2", 1:5]
-
 ```
-# Get the abundant kmers  
-## Abundant kmers within each ancestor 
 
+## Q: What is kmer abundance and diversity across lines/ancestral strains?
+### Get the kmers >= 2 across ancestors
+For each ancestral lineage, get the absolute amount of kmer content in kb. Use all the kmers that have at least 2 copies (normalized) in all the MA lines
+
+### Make a new data matrix for lines from each ancestor
+```{r}
+data_1373 <- data_sorted[which (substr(rownames(data_sorted), start = 1, stop = 7) == "CC-1373"),  ]
+data_1952 <- data_sorted[which (substr(rownames(data_sorted), start = 1, stop = 7) == "CC-1952"),  ]
+data_2342 <- data_sorted[which (substr(rownames(data_sorted), start = 1, stop = 7) == "CC-2342"),  ]
+data_2344 <- data_sorted[which (substr(rownames(data_sorted), start = 1, stop = 7) == "CC-2344"),  ]
+data_2931 <- data_sorted[which (substr(rownames(data_sorted), start = 1, stop = 7) == "CC-2931"),  ]
+data_2937 <- data_sorted[which (substr(rownames(data_sorted), start = 1, stop = 7) == "CC-2937"),  ]
+```
+
+### Q: What is total kmer content?
+#### Load functions to extract kmers >= 2 and calculate kmer content
+```{r}
+#FUNCTIONS
+get_legit_kmer_indexes <- function (kmer_mx) {
+  indexes <- c()
+  for (i in 1:ncol(kmer_mx)) { ## go through each column of the data
+    p <- kmer_mx[,i] >= 2 ## at least 2 copies
+    if (sum(p)==nrow(kmer_mx)) { # if all samples have at least 2 copies
+      indexes <- c(indexes, i)
+    }
+  }
+  return(indexes)
+}
+
+#get matrix with absolute kmer content (multiplied by length of kmer)
+get_abskmer_mx <- function (kmer_mx, indexes) {
+  kmers.abs <- matrix(nrow=nrow(kmer_mx), ncol=max(indexes))
+  for (i in indexes) {
+    for (j in 1:nrow(kmer_mx)) {
+    kmers.abs[j,i] <- kmer_mx[j,i] * (nchar(colnames(kmer_mx)[i], type="chars")) 
+    }
+  }
+  kmers.abs <- kmers.abs[,colSums(is.na(kmers.abs)) != nrow(kmers.abs)] # get rid of columns that are all NAs
+  return(kmers.abs)
+}
+
+# get total kmer content per MA line
+get_total_kmercontent <- function (abs_mx) {
+  total.kmers.abs <- c()
+  for (i in 1:nrow(abs_mx)){
+    total.kmers.abs[i] <- sum(abs_mx[i,])/10^3
+  }
+  names(total.kmers.abs) <- rownames(abs_mx)
+  return (total.kmers.abs)
+}
+```
+
+#### Do calculations, averaging values across lines for each ancestral strain
+```{r}
+legit.kmer.indexes_1373 <- get_legit_kmer_indexes(data_1373)
+N_k2_1373<-length(legit.kmer.indexes_1373)
+abs.mx_1373 <- get_abskmer_mx(data_1373, legit.kmer.indexes_1373)
+total.kmercontent_1373 <- get_total_kmercontent(abs.mx_1373)
+Mean_k2_cont_1373<-mean(total.kmercontent_1373)
+Mean_k2_cont_per_line_1373<-total.kmercontent_1373 # note: this is in kb
+
+legit.kmer.indexes_1952 <- get_legit_kmer_indexes(data_1952)
+N_k2_1952<-length(legit.kmer.indexes_1952) 
+abs.mx_1952 <- get_abskmer_mx(data_1952, legit.kmer.indexes_1952)
+total.kmercontent_1952 <- get_total_kmercontent(abs.mx_1952)
+Mean_k2_cont_1952<-mean(total.kmercontent_1952) # note: this is in kb
+Mean_k2_cont_per_line_1952<-total.kmercontent_1952 # note: this is in kb
+
+legit.kmer.indexes_2342 <- get_legit_kmer_indexes(data_2342)
+N_k2_2342<-length(legit.kmer.indexes_2342) 
+abs.mx_2342 <- get_abskmer_mx(data_2342, legit.kmer.indexes_2342)
+total.kmercontent_2342 <- get_total_kmercontent(abs.mx_2342)
+Mean_k2_cont_2342<-mean(total.kmercontent_2342) # note: this is in kb
+Mean_k2_cont_per_line_2342<-total.kmercontent_2342 # note: this is in kb
+
+legit.kmer.indexes_2344 <- get_legit_kmer_indexes(data_2344)
+N_k2_2344<-length(legit.kmer.indexes_2344) 
+abs.mx_2344 <- get_abskmer_mx(data_2344, legit.kmer.indexes_2344)
+total.kmercontent_2344 <- get_total_kmercontent(abs.mx_2344)
+Mean_k2_cont_2344<-mean(total.kmercontent_2344)
+Mean_k2_cont_per_line_2344<-total.kmercontent_2344 # note: this is in kb
+
+legit.kmer.indexes_2931 <- get_legit_kmer_indexes(data_2931)
+N_k2_2931<-length(legit.kmer.indexes_2931) 
+abs.mx_2931 <- get_abskmer_mx(data_2931, legit.kmer.indexes_2931)
+total.kmercontent_2931 <- get_total_kmercontent(abs.mx_2931)
+Mean_k2_cont_2931<-mean(total.kmercontent_2931)
+Mean_k2_cont_per_line_2931<-total.kmercontent_2931 # note: this is in kb
+
+legit.kmer.indexes_2937 <- get_legit_kmer_indexes(data_2937)
+N_k2_2937<-length(legit.kmer.indexes_2937) 
+abs.mx_2937 <- get_abskmer_mx(data_2937, legit.kmer.indexes_2937)
+total.kmercontent_2937 <- get_total_kmercontent(abs.mx_2937)
+Mean_k2_cont_2937<-mean(total.kmercontent_2937)
+Mean_k2_cont_per_line_2937<-total.kmercontent_2937 # note: this is in kb
+```
+
+#### A: Table of N kmers and mean kmer content (kb) per ancestor
+```{r results="asis"}
+ancestors<-c("CC-1373", "CC-1952", "CC-2342", "CC-2344", "CC-2931", "CC-2937")
+
+N_k2<-c(N_k2_1373,N_k2_1952,N_k2_2342,N_k2_2344,N_k2_2931,N_k2_2937)
+
+Mean_cont_per_anc<-c(Mean_k2_cont_1373,Mean_k2_cont_1952,Mean_k2_cont_2342,Mean_k2_cont_2344,Mean_k2_cont_2931,Mean_k2_cont_2937)
+
+common.kmer.df<-data.frame(Ancestor=ancestors,N_kmers_over2=N_k2, Kmer_content=Mean_cont_per_anc)
+
+stargazer(common.kmer.df, type="html", summary=FALSE)
+```
+
+Mean number of kmers across lines is `r mean(common.kmer.df$N_kmers_over2)`.  
+Mean kmer content across lines is `r mean(common.kmer.df$Kmer_content)` kb.  
+For a genome of 120 Mb, this equates to `r ((mean(common.kmer.df$Kmer_content)*10^3)/(121*10^6))*100`% of the genome. Range: `r ((min(common.kmer.df$Kmer_content)*10^3)/(121*10^6))*100` to `r ((max(common.kmer.df$Kmer_content)*10^3)/(121*10^6))*100`%.
+
+#### A: Boxplot of kmer content aross ancestral strains
+```{r}
+# Make table of kmer content per line, then plot by ancestor
+
+category <- c( 
+  rep ("CC-1373", times = nrow(data_1373)),
+  rep ("CC-1952", times = nrow(data_1952)),
+  rep ("CC-2342", times = nrow(data_2342)),
+  rep ("CC-2344", times = nrow(data_2344)),
+  rep ("CC-2931", times = nrow(data_2931)),
+  rep ("CC-2937", times = nrow(data_2937))
+  )
+
+total.kmercontent_all <- c(total.kmercontent_1373, total.kmercontent_1952, total.kmercontent_2342, total.kmercontent_2344, total.kmercontent_2931, total.kmercontent_2937)
+#length(total.kmercontent_all) #should be 85 if all lines are accounted for
+
+TotalAbs_df <- data.frame (total.kmercontent_all, category)
+par(mar=c(5,5,3,1))
+boxplot (TotalAbs_df[,1] ~ TotalAbs_df[,2], data=TotalAbs_df, las=2, cex.axis=0.8, ylab="Total tandem repeat content (kb)", Main = "Per MA line absolute total mutation rate", col="deepskyblue3")
+```
+
+### Q: What does the distribution of kmer abundance look like?
+```{r warning=FALSE, message=FALSE, error=FALSE}
+#get the kmer >= 2 into a datafile
+df.1373=data_1373[,legit.kmer.indexes_1373]
+df.1373.melted=melt(df.1373)
+colnames(df.1373.melted) = c("Line", "Kmer", "Copy_number")
+
+#plot one line
+#ggplot(df.1373.melted[which(df.1373.melted$Line == "CC-1373_MA1"),], aes(x=log10(Copy_number), color=Line)) +
+#  geom_histogram() +
+#  facet_wrap(~Line)
+
+#plot all lines
+ggplot(df.1373.melted, aes(x=log10(Copy_number), color=Line)) +
+  geom_histogram() +
+  facet_wrap(~Line) +
+  theme(legend.position = "none") +
+  ggtitle("MA lines derived from CC_1373")
+
+#get the kmer >= 2 into a datafile
+df.1952=data_1952[,legit.kmer.indexes_1952]
+df.1952.melted=melt(df.1952)
+colnames(df.1952.melted) = c("Line", "Kmer", "Copy_number")
+
+#plot all lines
+ggplot(df.1952.melted, aes(x=log10(Copy_number), color=Line)) +
+  geom_histogram() +
+  facet_wrap(~Line) +
+  theme(legend.position = "none") +
+  ggtitle("MA lines derived from CC_1952")
+
+#get the kmer >= 2 into a datafile
+df.2342=data_2342[,legit.kmer.indexes_2342]
+df.2342.melted=melt(df.2342)
+colnames(df.2342.melted) = c("Line", "Kmer", "Copy_number")
+
+#plot all lines
+ggplot(df.2342.melted, aes(x=log10(Copy_number), color=Line)) +
+  geom_histogram() +
+  facet_wrap(~Line) +
+  theme(legend.position = "none") +
+  ggtitle("MA lines derived from CC_2342")
+
+#get the kmer >= 2 into a datafile
+df.2344=data_2344[,legit.kmer.indexes_2344]
+df.2344.melted=melt(df.2344)
+colnames(df.2344.melted) = c("Line", "Kmer", "Copy_number")
+
+#plot all lines
+ggplot(df.2344.melted, aes(x=log10(Copy_number), color=Line)) +
+  geom_histogram() +
+  facet_wrap(~Line) +
+  theme(legend.position = "none") +
+  ggtitle("MA lines derived from CC_2344")
+
+#get the kmer >= 2 into a datafile
+df.2931=data_2931[,legit.kmer.indexes_2931]
+df.2931.melted=melt(df.2931)
+colnames(df.2931.melted) = c("Line", "Kmer", "Copy_number")
+
+#plot all lines
+ggplot(df.2931.melted, aes(x=log10(Copy_number), color=Line)) +
+  geom_histogram() +
+  facet_wrap(~Line) +
+  theme(legend.position = "none") +
+  ggtitle("MA lines derived from CC_2931")
+
+#get the kmer >= 2 into a datafile
+df.2937=data_2937[,legit.kmer.indexes_2937]
+df.2937.melted=melt(df.2937)
+colnames(df.2937.melted) = c("Line", "Kmer", "Copy_number")
+
+#plot all lines
+ggplot(df.2937.melted, aes(x=log10(Copy_number), color=Line)) +
+  geom_histogram() +
+  facet_wrap(~Line) +
+  theme(legend.position = "none") +
+  ggtitle("MA lines derived from CC_2937")
+```
+
+### Q: How many really abundant kmers are there?
+#### Get the kmers that have an average of at least 1000 copies  
+```{r results="asis"}
+get_1000_kmers <- function (kmer_matrix) {
+  common.kmer.indexes <- c()
+  for (i in 1:ncol(kmer_matrix)) {
+    if (mean(kmer_matrix[,i])>=1000) {
+      common.kmer.indexes <- c(common.kmer.indexes, i)
+    }
+  }
+  names(common.kmer.indexes) <- colnames(kmer_matrix)[common.kmer.indexes]
+  return (common.kmer.indexes)
+}
+
+kmer1000.indexes_1373 <- get_1000_kmers(data_1373)
+k1000_1373<-length(kmer1000.indexes_1373) # length 4
+
+kmer1000.indexes_1952 <- get_1000_kmers(data_1952)
+k1000_1952<-length(kmer1000.indexes_1952) # length 5
+
+kmer1000.indexes_2342 <- get_1000_kmers(data_2342)
+k1000_2342<-length(kmer1000.indexes_2342) # length 6
+
+kmer1000.indexes_2344 <- get_1000_kmers(data_2344)
+k1000_2344<-length(kmer1000.indexes_2344) # length 3
+
+kmer1000.indexes_2931 <- get_1000_kmers(data_2931)
+k1000_2391<-length(kmer1000.indexes_2931) # length 7
+
+kmer1000.indexes_2937 <- get_1000_kmers(data_2937)
+k1000_2397<-length(kmer1000.indexes_2937) # length 5
+
+k1000s<-c(k1000_1373,k1000_1952,k1000_2342,k1000_2344,k1000_2391,k1000_2397)
+
+common.kmer.df$N_kmers_over1000<-k1000s
+
+stargazer(common.kmer.df, type="html", summary=FALSE)
+```
+
+### Q: which kmers are the most abundant (mean over 1000 copies)?
+```{r results="asis"}
+df.k1000_1373=data_1373[,which(apply(data_1373, 2, mean) >=1000)]
+df.k1000_1952=data_1952[,which(apply(data_1952, 2, mean) >=1000)]
+df.k1000_2342=data_2342[,which(apply(data_2342, 2, mean) >=1000)]
+df.k1000_2344=data_2344[,which(apply(data_2344, 2, mean) >=1000)]
+df.k1000_2931=data_2931[,which(apply(data_2931, 2, mean) >=1000)]
+df.k1000_2937=data_2937[,which(apply(data_2937, 2, mean) >=1000)]
+
+stargazer(df.k1000_1373, type="html", summary=FALSE)
+stargazer(df.k1000_1952, type="html", summary=FALSE)
+stargazer(df.k1000_2342, type="html", summary=FALSE)
+stargazer(df.k1000_2344, type="html", summary=FALSE)
+stargazer(df.k1000_2931, type="html", summary=FALSE)
+stargazer(df.k1000_2937, type="html", summary=FALSE)
+
+AC_copy_1373=mean (data_1373[,which(colnames(data_1373) == "AC")])
+AC_copy_1952=mean (data_1952[,which(colnames(data_1952) == "AC")])
+AC_copy_2342=mean (data_2342[,which(colnames(data_2342) == "AC")])
+AC_copy_2344=mean (data_2344[,which(colnames(data_2344) == "AC")])
+AC_copy_2931=mean (data_2931[,which(colnames(data_2931) == "AC")])
+AC_copy_2937=mean (data_2937[,which(colnames(data_2937) == "AC")])
+
+AC_copy_number=c(AC_copy_1373,AC_copy_1952,AC_copy_2342,AC_copy_2344,AC_copy_2931,AC_copy_2937)
+
+common.kmer.df$AC_copy_number=AC_copy_number
+```
+
+**AC** is the most abundant (by an order of magnitude).  
+It has a mean copy number of `r mean(common.kmer.df$AC_copy_number)` across lines derived from a single ancestor.
+
+#### Get the AC repeat means  
+AC is the most abundant repeat in all ancestors. 
+
+```{r results="asis"}
+stargazer(common.kmer.df,type="html", summary=FALSE)
+```
+
+### Q: is inference of ancestor from mean kmers appropriate?
+Using principal components and NJ trees with kmers >= 2, do relationships reflect ancestral relationships?
+#### A: PCA clusters lines unequivocally by ancestor
+The only close ones are CC-1952 and CC-2342.
+```{r}
+#PCA
+legit_kmers_1373=colnames(df.1373)
+legit_kmers_1952=colnames(df.1952)
+legit_kmers_2342=colnames(df.2342)
+legit_kmers_2344=colnames(df.2344)
+legit_kmers_2931=colnames(df.2931)
+legit_kmers_2937=colnames(df.2937)
+
+legit_kmers=c(legit_kmers_1373,legit_kmers_1952,legit_kmers_2342,legit_kmers_2344,legit_kmers_2931,legit_kmers_2937)
+
+legit_idx<-match(unique(legit_kmers), colnames(data_sorted))
+
+get_ancestor <- function(row_number) {
+  Anc <- substr(rownames(data_sorted)[row_number], start = 1, stop = 7)
+  return (Anc)
+}
+
+category <- c()
+for (i in 1:nrow(data_sorted)) {
+  category <- c(category, get_ancestor(i))
+}
+
+pca.data <- prcomp(data_sorted[, legit_idx], scale.=T)
+
+# using the 46 union kmers
+g <- ggbiplot(pca.data, obs.scale = 1, var.scale = 1, groups = category, var.axes = F, alpha=0.8)
+g <- g + scale_color_discrete(name='')
+g <- g + theme(legend.direction='horizontal', legend.position='top')
+print(g)
+```
+
+## Get the abundant kmers  
+### Abundant kmers within each ancestor 
+Abundant kmers are those with an average of at least 100 copies across MA lines of a single ancestor.
 ```{r}
 # function that takes in a matrix of copy numbers and returns the indexes of kmers that have a mean copy number across all MA lines of at least 100
 get_common_kmers <- function (kmer_matrix) {
@@ -130,52 +501,9 @@ length(common.kmer.indexes_2931) # 29
 
 common.kmer.indexes_2937 <- get_common_kmers(data_2937)
 length(common.kmer.indexes_2937) # 29
-
 ```
-## Get the kmers that have at least 1000 copies  
 
-```{r}
-get_1000_kmers <- function (kmer_matrix) {
-  common.kmer.indexes <- c()
-  for (i in 1:ncol(kmer_matrix)) {
-    if (mean(kmer_matrix[,i])>=1000) {
-      common.kmer.indexes <- c(common.kmer.indexes, i)
-    }
-  }
-  names(common.kmer.indexes) <- colnames(kmer_matrix)[common.kmer.indexes]
-  return (common.kmer.indexes)
-}
-kmer1000.indexes_1373 <- get_1000_kmers(data_1373)
-kmer1000.indexes_1373 # length 4
-
-kmer1000.indexes_1952 <- get_1000_kmers(data_1952)
-kmer1000.indexes_1952 # length 5
-
-kmer1000.indexes_2342 <- get_1000_kmers(data_2342)
-kmer1000.indexes_2342 # length 6
-
-kmer1000.indexes_2344 <- get_1000_kmers(data_2344)
-kmer1000.indexes_2344 # length 3
-
-kmer1000.indexes_2931 <- get_1000_kmers(data_2931)
-kmer1000.indexes_2931 # length 7
-
-kmer1000.indexes_2937 <- get_1000_kmers(data_2937)
-kmer1000.indexes_2937 # length 5
-```
-## Get the AC repeat means  
-AC is the most abundant repeat in all ancestors. 
-
-```{r}
-mean (data_1373[,which(colnames(data_1373) == "AC")])
-mean (data_1952[,which(colnames(data_1952) == "AC")])
-mean (data_2342[,which(colnames(data_2342) == "AC")])
-mean (data_2344[,which(colnames(data_2344) == "AC")])
-mean (data_2931[,which(colnames(data_2931) == "AC")])
-mean (data_2937[,which(colnames(data_2937) == "AC")])
-```
-## Get the union and intersection of the common kmers  
-
+### Get the union and intersection of the common kmers  
 ```{r}
 shared.common.kmers <- Reduce(intersect, list
        (names(common.kmer.indexes_1373), names(common.kmer.indexes_1952),
@@ -201,9 +529,9 @@ common.kmer.union.indexes <- Reduce(union, list
        ))
 
 ```
-# PCA  
-Use the union of common kmers (46), as well as the overall top 100 kmers to make the PCA.  
 
+## PCA with abundant kmers
+Use the union of common kmers (46), as well as the overall top 100 kmers to make the PCA.  
 ```{r}
 get_ancestor <- function(row_number) {
   Anc <- substr(rownames(data_sorted)[row_number], start = 1, stop = 7)
@@ -275,11 +603,10 @@ g <- ggbiplot(pca.data, obs.scale = 1, var.scale = 1, groups = category, var.axe
 g <- g + scale_color_discrete(name='')
 g <- g + theme(legend.direction='horizontal', legend.position='top')
 print(g)
-
 ```
-# Make Figure 1  
-Choose a few kmers to illustrate  
 
+## Make Figure 1  
+Choose a few kmers to illustrate  
 ```{r}
 
 Fig1_kmers <- c("AGGCGG", "AAC", "ACACGC", "ACCGGC", "AGGCGC")
@@ -314,8 +641,8 @@ ggplot(Fig1_df, aes(fill=Ancestors, x=Fig1_kmers, y=means_fig1)) +
   theme(axis.title.x=element_blank())
 
 ```
-# Length and GC distribution of kmers   
 
+## Length and GC distribution of kmers   
 ``` {r} 
 # function to calculate length of string
 Calc_kmer_length <- function (kmer_string) {
@@ -340,8 +667,7 @@ length(which(common.kmer.union.lengths == 6))
 
 ```
 
-# Make Figure 2
-
+## Make Figure 2
 ```{r}
 qplot(x=common.kmer.union.lengths, geom="histogram", bins=15) + xlab("Kmer unit length") + 
   theme_bw() +
@@ -357,9 +683,9 @@ table2 <- data.frame(common.kmer.union, common.kmer.union.lengths, common.kmer.u
 #write.table(table2, file = "/Users/jullienflynn/Documents/AndyLab/Chlamy/ManuscriptFigures/Table2.txt", row.names = F, quote=F)
 
 ```
-# Interesting pattern of GC content  
-Maybe some repeats are coming from the chloroplast given their GC contents and the previous finding that the chloroplast DOES contain repeats.  
 
+## Interesting pattern of GC content  
+Maybe some repeats are coming from the chloroplast given their GC contents and the previous finding that the chloroplast DOES contain repeats.  
 ```{r}
 mean(common.kmer.union.gc)
 
@@ -403,8 +729,8 @@ ggplot (data = cp_plot, aes(y = cp_plot$gc, x = cp_plot$lengths, color = cp_plot
   theme(axis.text = element_text(size=14), axis.title = element_text(size=14), legend.position="none")
 
 ```
-# Differences in the abundance of the telomere repeat  
 
+## Differences in the abundance of the telomere repeat  
 ```{r}
 temp <- which(colnames (data_1373)=="AAAACCCT")
 telomere_abun_1373 <- data.frame(data_1373[,temp], "CC-1373")
@@ -470,8 +796,8 @@ hist(residuals_all)
 # great, the residuals are approximately normally distributed, parametric test is fine to do
 
 ```
-# Kmers that are polymorphic by presence/absence   
 
+## Kmers that are polymorphic by presence/absence   
 ```{r}
 
 # For Figure 1B
@@ -603,7 +929,7 @@ mean(data_2937[,"AAAC"])
 
 ```
 
-# Get total kmer content
+## Get total kmer content
 For each ancestral lineage, get the absolute amount of kmer content in kb. Use all the kmers that have at least 2 copies (normalized) in all the MA lines  
 
 ```{r}
@@ -701,7 +1027,7 @@ par(mar=c(5,5,3,1))
 boxplot (TotalAbs_df[,1] ~ TotalAbs_df[,2], data=TotalAbs_df, las=2, cex.axis=0.8, ylab="Total tandem repeat content (kb)", Main = "Per MA line absolute total mutation rate", col="deepskyblue3")
 ```
 
-##Do the kmers that have similar patterns of correlation in multiple MA ancestors have similar copy number?  
+##Q: Do the kmers that have similar patterns of correlation in multiple MA ancestors have similar copy number?  
 i.e. could similarity in mean copy number explain the similarity in correlation patterns.  
 ANSWER: NO.
 
@@ -728,3 +1054,4 @@ shared_corr_kmers_corr <- cor(shared_corr_kmers_df)
 shared_corr_kmers_corr
 
 # the means of these kmers are not the most correlated.
+```

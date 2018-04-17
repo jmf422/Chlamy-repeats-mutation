@@ -288,7 +288,7 @@ AAAACCCT_1373 <- get_interspersed_kmers("AAAACCCT", interspersion.metric.matrix_
 hist(sapply(names(AAAACCCT_1373), Calc_GC_content), xlab="GC content", main="1373: GC of kmers interspersed with telomere")
 length(AAAACCCT_1373)
 AAAACCCT_1373
-
+names(AAAACCCT_1373)
 
 # these are the kmers that were found with Tandem Repeats Finder to be on the chloroplast assembly
 cp_kmers <- c("AAAATAAAGTGT", "AAAATATATAAATATAGCT", "AAATACCTTACGGGAATAT")
@@ -328,6 +328,17 @@ cp_kmers %in% possible_cp_telomere
 summary(as.factor(possible_cp_telomere))
 
 ```
+** 40/46 kmers are interspersed with the telomere to some extent **
+
+```{r}
+all_telomere_kmers <- c(names(AAAACCCT_1373), names(AAAACCCT_1952), names(AAAACCCT_2342), names(AAAACCCT_2344), names(AAAACCCT_2931), names(AAAACCCT_2937) )
+
+all_telomere_kmers_fac <- as.factor(all_telomere_kmers)
+all_telomere_kmers_names <- names(summary(all_telomere_kmers_fac))
+
+setdiff(common.kmer.union, all_telomere_kmers_names )
+
+```
 Check interspersion of putative chloroplast kmers  
 
 ```{r}
@@ -350,6 +361,68 @@ AAATACCTTACGGGAATAT_2931
 AAATACCTTACGGGAATAT_2937 <- get_interspersed_kmers("AAATACCTTACGGGAATAT", interspersion.metric.matrix_2937)
 AAATACCTTACGGGAATAT_2937
 length(AAATACCTTACGGGAATAT_2937)
+```
+## What kmers are interspersed with itself (in long arrays)
+```{r}
+get_self_score <- function (kmer, input_mx) {
+  interspersed <- get_interspersed_kmers(kmer, input_mx)
+  return (interspersed[kmer])
+}
+
+a <- get_self_score("AAAACCCT", interspersion.metric.matrix_1373)
+colnames(interspersion.metric.matrix_1373)
+b <- get_self_score("AGGC", interspersion.metric.matrix_1373)
+
+
+self_scores_1373 <- c()
+for (i in 1:ncol(interspersion.metric.matrix_1373)){
+  self_scores_1373 <- c(self_scores_1373, get_self_score(colnames(interspersion.metric.matrix_1373)[i], interspersion.metric.matrix_1373))
+}
+long_arrays_1373 <- names( which(!is.na(self_scores_1373)))
+
+self_scores_1952 <- c()
+for (i in 1:ncol(interspersion.metric.matrix_1952)){
+  self_scores_1952 <- c(self_scores_1952, get_self_score(colnames(interspersion.metric.matrix_1952)[i], interspersion.metric.matrix_1952))
+}
+long_arrays_1952 <- names( which(!is.na(self_scores_1952)))
+
+self_scores_2342 <- c()
+for (i in 1:ncol(interspersion.metric.matrix_2342)){
+  self_scores_2342 <- c(self_scores_2342, get_self_score(colnames(interspersion.metric.matrix_2342)[i], interspersion.metric.matrix_2342))
+}
+(long_arrays_2342 <- names( which(!is.na(self_scores_2342))))
+
+self_scores_2344 <- c()
+for (i in 1:ncol(interspersion.metric.matrix_2344)){
+  self_scores_2344 <- c(self_scores_2344, get_self_score(colnames(interspersion.metric.matrix_2344)[i], interspersion.metric.matrix_2344))
+}
+(long_arrays_2344 <- names( which(!is.na(self_scores_2344))))
+
+self_scores_2931 <- c()
+for (i in 1:ncol(interspersion.metric.matrix_2931)){
+  self_scores_2931 <- c(self_scores_2931, get_self_score(colnames(interspersion.metric.matrix_2931)[i], interspersion.metric.matrix_2931))
+}
+(long_arrays_2931 <- names( which(!is.na(self_scores_2931))))
+
+self_scores_2937 <- c()
+for (i in 1:ncol(interspersion.metric.matrix_2937)){
+  self_scores_2937 <- c(self_scores_2937, get_self_score(colnames(interspersion.metric.matrix_2937)[i], interspersion.metric.matrix_2937))
+}
+(long_arrays_2937 <- names( which(!is.na(self_scores_2937))))
+
+long_arrays_all <- c(long_arrays_1373, long_arrays_2342, long_arrays_1952, long_arrays_2344, long_arrays_2931, long_arrays_2937)
+
+long_arrays_factor <- as.factor(long_arrays_all)
+summary(long_arrays_factor)
+length(summary(long_arrays_factor))
+## great, 20 of the kmers are interspersed at a high level. Save these kmers and bring them into the mutation rate script.
+
+# you should save them as a list and import into the other file. 
+kmers_long_arrays_byline <- list(long_arrays_1373, long_arrays_1952,long_arrays_2342, long_arrays_2344, long_arrays_2931, long_arrays_2937)
+
+#write(names(summary(long_arrays_factor)), "/Users/jullienflynn/Documents/AndyLab/Chlamy/PostReview/kmers_long_arrays.txt")
+
+save(kmers_long_arrays_byline, file="/Users/jullienflynn/Documents/AndyLab/Chlamy/PostReview/kmers_long_arrays_byline.txt")
 
 ```
 ## What is the interspersion patterns of the repeats that have interesting patterns of interspersion in the correlation plots? 

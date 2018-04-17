@@ -243,6 +243,15 @@ mu_absnorm_2344 <- t (t(mu_abs_2344)/abundance_avg_2344)
 mu_absnorm_2931 <- t (t(mu_abs_2931)/abundance_avg_2931)
 mu_absnorm_2937 <- t (t(mu_abs_2937)/abundance_avg_2937)
 
+# directional normalized
+
+munorm_1373 <- t (t(mu_1373)/abundance_avg_1373)
+munorm_1952 <- t (t(mu_1952)/abundance_avg_1952)
+munorm_2342 <- t (t(mu_2342)/abundance_avg_2342)
+munorm_2344 <- t (t(mu_2344)/abundance_avg_2344)
+munorm_2931 <- t (t(mu_2931)/abundance_avg_2931)
+munorm_2937 <- t (t(mu_2937)/abundance_avg_2937)
+
 abundance_avg_2931
 names(abundance_avg_2931) == colnames(mu_absnorm_2931)
 names(abundance_avg_1373) == colnames(mu_absnorm_1373)
@@ -632,6 +641,154 @@ summary(nuc.cp_model)
 aov(nuc.cp_model)
 
 
+
+ load("/Users/jullienflynn/Documents/AndyLab/Chlamy/PostReview/kmers_long_arrays_byline.txt")
+
+
+# go through for each ancestor then put in a big dataframe to plot
+## remove specific element from the list: remove the telomere repeat
+### 1373 ###
+to_remove <- which(kmers_long_arrays_byline[[1]]=="AAAACCCT")
+kmers_long_arrays_1373 <- kmers_long_arrays_byline[[1]]
+kmers_long_arrays_1373 <- kmers_long_arrays_1373[-to_remove]
+longdf_1373 <- data.frame(as.vector(mu_absnorm_1373[,kmers_long_arrays_1373]), "long_arrays")
+colnames(longdf_1373) <-c ("mu", "array_type")
+
+kmers_short_arrays_1373 <- mu_absnorm_1373[,!(colnames(mu_absnorm_1373) %in% kmers_long_arrays_1373)]
+shortdf_1373 <- data.frame(as.vector(kmers_short_arrays_1373), "short_arrays")
+colnames(shortdf_1373) <- c("mu", "array_type")
+
+### 1952 ###
+to_remove <- which(kmers_long_arrays_byline[[2]]=="AAAACCCT")
+kmers_long_arrays_1952 <- kmers_long_arrays_byline[[2]]
+kmers_long_arrays_1952 <- kmers_long_arrays_1952[-to_remove]
+longdf_1952 <- data.frame(as.vector(mu_absnorm_1952[,kmers_long_arrays_1952]), "long_arrays")
+colnames(longdf_1952) <-c ("mu", "array_type")
+
+kmers_short_arrays_1952 <- mu_absnorm_1373[,!(colnames(mu_absnorm_1373) %in% kmers_long_arrays_1952)]
+shortdf_1952 <- data.frame(as.vector(kmers_short_arrays_1952), "short_arrays")
+colnames(shortdf_1952) <- c("mu", "array_type")
+
+
+### 2342 ###
+to_remove <- which(kmers_long_arrays_byline[[3]]=="AAAACCCT")
+kmers_long_arrays_2342 <- kmers_long_arrays_byline[[3]]
+kmers_long_arrays_2342 <- kmers_long_arrays_2342[-to_remove]
+longdf_2342 <- data.frame(as.vector(mu_absnorm_2342[,kmers_long_arrays_2342]), "long_arrays")
+colnames(longdf_2342) <-c ("mu", "array_type")
+
+kmers_short_arrays_2342 <- mu_absnorm_2342[,!(colnames(mu_absnorm_2342) %in% kmers_long_arrays_2342)]
+shortdf_2342 <- data.frame(as.vector(kmers_short_arrays_2342), "short_arrays")
+colnames(shortdf_2342) <- c("mu", "array_type")
+
+### 2344 ###
+
+to_remove <- which(kmers_long_arrays_byline[[4]]=="AAAACCCT")
+kmers_long_arrays_2344 <- kmers_long_arrays_byline[[4]]
+kmers_long_arrays_2344 <- kmers_long_arrays_2344[-to_remove]
+longdf_2344 <- data.frame(as.vector(mu_absnorm_2344[,kmers_long_arrays_2344]), "long_arrays")
+colnames(longdf_2344) <-c ("mu", "array_type")
+
+kmers_short_arrays_2344 <- mu_absnorm_2344[,!(colnames(mu_absnorm_2344) %in% kmers_long_arrays_2344)]
+shortdf_2344 <- data.frame(as.vector(kmers_short_arrays_2344), "short_arrays")
+colnames(shortdf_2344) <- c("mu", "array_type")
+
+### 2931 ###
+
+to_remove <- which(kmers_long_arrays_byline[[5]]=="AAAACCCT")
+kmers_long_arrays_2931 <- kmers_long_arrays_byline[[5]]
+kmers_long_arrays_2931 <- kmers_long_arrays_2931[-to_remove]
+longdf_2931 <- data.frame(as.vector(mu_absnorm_2931[,kmers_long_arrays_2931]), "long_arrays")
+colnames(longdf_2931) <-c ("mu", "array_type")
+
+kmers_short_arrays_2931 <- mu_absnorm_2931[,!(colnames(mu_absnorm_2931) %in% kmers_long_arrays_2931)]
+shortdf_2931 <- data.frame(as.vector(kmers_short_arrays_2931), "short_arrays")
+colnames(shortdf_2931) <- c("mu", "array_type")
+
+### 2937 ###
+
+to_remove <- which(kmers_long_arrays_byline[[6]]=="AAAACCCT")
+kmers_long_arrays_2937 <- kmers_long_arrays_byline[[6]]
+kmers_long_arrays_2937 <- kmers_long_arrays_2937[-to_remove]
+longdf_2937 <- data.frame(as.vector(mu_absnorm_2937[,kmers_long_arrays_2937]), "long_arrays")
+colnames(longdf_2937) <-c ("mu", "array_type")
+
+kmers_short_arrays_2937 <- mu_absnorm_2937[,!(colnames(mu_absnorm_2937) %in% kmers_long_arrays_2937)]
+shortdf_2937 <- data.frame(as.vector(kmers_short_arrays_2937), "short_arrays")
+colnames(shortdf_2937) <- c("mu", "array_type")
+
+#####
+long.short_df_all <- rbind (longdf_1373, longdf_1952, longdf_2342, longdf_2344, longdf_2931, longdf_2937, shortdf_1373, shortdf_1952, shortdf_2342, shortdf_2344, shortdf_2931, shortdf_2937)
+boxplot (mu ~ array_type, data=long.short_df_all, las=1, cex.axis=0.8, ylab="Copies changed/gen/copy", outline=F)
+
+long.short_model <- lm(formula = mu ~ array_type, data = long.short_df_all)
+summary(long.short_model)
+aov(long.short_model)
+```
+Not a significant difference in the absolute mutation rate of long versus short arrays. Look at directionality now.
+
+```{r}
+### 1373 ###
+longdf_1373 <- data.frame(as.vector(munorm_1373[,kmers_long_arrays_1373]), "long_arrays")
+colnames(longdf_1373) <-c ("mu", "array_type")
+
+kmers_short_arrays_1373 <- munorm_1373[,!(colnames(mu_absnorm_1373) %in% kmers_long_arrays_1373)]
+shortdf_1373 <- data.frame(as.vector(kmers_short_arrays_1373), "short_arrays")
+colnames(shortdf_1373) <- c("mu", "array_type")
+
+### 1952 ###
+longdf_1952 <- data.frame(as.vector(munorm_1952[,kmers_long_arrays_1952]), "long_arrays")
+colnames(longdf_1952) <-c ("mu", "array_type")
+
+kmers_short_arrays_1952 <- munorm_1373[,!(colnames(mu_absnorm_1373) %in% kmers_long_arrays_1952)]
+shortdf_1952 <- data.frame(as.vector(kmers_short_arrays_1952), "short_arrays")
+colnames(shortdf_1952) <- c("mu", "array_type")
+
+### 2342 ###
+longdf_2342 <- data.frame(as.vector(munorm_2342[,kmers_long_arrays_2342]), "long_arrays")
+colnames(longdf_2342) <-c ("mu", "array_type")
+
+kmers_short_arrays_2342 <- munorm_2342[,!(colnames(mu_absnorm_2342) %in% kmers_long_arrays_2342)]
+shortdf_2342 <- data.frame(as.vector(kmers_short_arrays_2342), "short_arrays")
+colnames(shortdf_2342) <- c("mu", "array_type")
+
+### 2344 ###
+
+longdf_2344 <- data.frame(as.vector(munorm_2344[,kmers_long_arrays_2344]), "long_arrays")
+colnames(longdf_2344) <-c ("mu", "array_type")
+
+kmers_short_arrays_2344 <- munorm_2344[,!(colnames(mu_absnorm_2344) %in% kmers_long_arrays_2344)]
+shortdf_2344 <- data.frame(as.vector(kmers_short_arrays_2344), "short_arrays")
+colnames(shortdf_2344) <- c("mu", "array_type")
+
+### 2931 ###
+
+longdf_2931 <- data.frame(as.vector(munorm_2931[,kmers_long_arrays_2931]), "long_arrays")
+colnames(longdf_2931) <-c ("mu", "array_type")
+
+kmers_short_arrays_2931 <- munorm_2931[,!(colnames(mu_absnorm_2931) %in% kmers_long_arrays_2931)]
+shortdf_2931 <- data.frame(as.vector(kmers_short_arrays_2931), "short_arrays")
+colnames(shortdf_2931) <- c("mu", "array_type")
+
+### 2937 ###
+
+longdf_2937 <- data.frame(as.vector(munorm_2937[,kmers_long_arrays_2937]), "long_arrays")
+colnames(longdf_2937) <-c ("mu", "array_type")
+
+kmers_short_arrays_2937 <- munorm_2937[,!(colnames(mu_absnorm_2937) %in% kmers_long_arrays_2937)]
+shortdf_2937 <- data.frame(as.vector(kmers_short_arrays_2937), "short_arrays")
+colnames(shortdf_2937) <- c("mu", "array_type")
+
+#####
+long.short_df_all <- rbind (longdf_1373, longdf_1952, longdf_2342, longdf_2344, longdf_2931, longdf_2937, shortdf_1373, shortdf_1952, shortdf_2342, shortdf_2344, shortdf_2931, shortdf_2937)
+boxplot (mu ~ array_type, data=long.short_df_all, las=1, cex.axis=0.8, ylab="Copies changed/gen/copy", outline=F)
+
+# There was also ot a difference in directionality.
+
+long.short_model <- lm(formula = mu ~ array_type, data = long.short_df_all)
+summary(long.short_model)
+aov(long.short_model)
+
 ```
 # Is there variation in mutation rate across ancestors and kmers?  
 
@@ -657,7 +814,12 @@ mu_absnorm_df_2937 <- make_df_from_matrix(mu_absnorm_2937, "CC-2937")
 
 mu_absnorm_df_complete <- rbind (mu_absnorm_df_1373, mu_absnorm_df_1952, mu_absnorm_df_2342, mu_absnorm_df_2344, mu_absnorm_df_2931, mu_absnorm_df_2937)
 
-(ggplot(mu_absnorm_df_complete, aes(Mu, kmer.names, colour = Ancestor)) + geom_point(size = 0.8)) + ylab("kmer") + xlab("copies/generation/copy")
+ggplot(mu_absnorm_df_complete, aes(Mu, kmer.names, colour = Ancestor)) + 
+  geom_point(size = 0.8) +
+  ylab("kmer") + 
+  xlab("copies/generation/copy") +
+  scale_colour_brewer(palette="Set1")
+  
 
 
 # get summaries - mean for each ancestor
@@ -773,7 +935,7 @@ SNMrates_all <- c(SNMrates_1373, SNMrates_1952, SNMrates_2342, SNMrates_2344, SN
 length(SNMrates_all)
 mu_absnorm_perline_all <- c(mu_absnorm_perline_1373, mu_absnorm_perline_1952, mu_absnorm_perline_2342, mu_absnorm_perline_2344, mu_absnorm_perline_2931, mu_absnorm_perline_2937)
 
-hist(mu_absnorm_perline_all)
+hist(mu_absnorm_perline_all, main="per line kmer mutation rate histogram")
 
 summary(lm(formula = SNMrates_all ~ mu_absnorm_perline_all))
 cor.test(y=mu_absnorm_perline_all, x=SNMrates_all )
@@ -843,14 +1005,16 @@ ggplot(mus_comp, aes(color=Ancestor, x=SNM, y=kmer)) +
   ylab("Repeat mutation rate") +
   xlab("SNM rate") +
   theme_light(base_size = 14) +
-  theme(legend.position="none")
+  theme(legend.position="none") + 
+  scale_colour_brewer(palette = "Set1")
 
 ggplot(mus_comp, aes(color=Ancestor, x=indel, y=kmer)) + 
   geom_point(alpha=0.8, size=2) + 
   ylab("Repeat mutation rate") +
   xlab("INDEL rate") +
   theme_light(base_size = 14) +
-  theme(legend.position="none")
+  theme(legend.position="none") +
+  scale_colour_brewer(palette = "Set1")
 
 
 ```
